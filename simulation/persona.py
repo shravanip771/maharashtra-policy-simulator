@@ -69,6 +69,7 @@ class StudentPersona:
     document_readiness: float = 0.5        # Availability of valid Income Certificate, Domicile, CAP letter
     financial_urgency: float = 0.8         # Need for fee concession to avoid debt/dropout
     peer_network_support: float = 0.5      # Presence of peers/seniors guiding through application
+    institutional_trust: float = 0.5       # Perceived fairness and trust in DBT processing timelines
 
     # Psychology & Agent State
     personality: PersonalityTraits = field(default_factory=PersonalityTraits)

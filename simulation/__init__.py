@@ -23,12 +23,25 @@ from simulation.agent import (
     GeminiLLMProvider,
     PersonaCalculatedMetrics,
     PersonaReasoningOutput,
-    build_persona_reasoning_prompt
+    PersonaInteractionOutput,
+    build_persona_reasoning_prompt,
+    build_peer_interaction_prompt
 )
 from simulation.engine import (
     SimulationEngine,
     SimulationStepOutput,
-    CohortSimulationResult
+    CohortSimulationResult,
+    MultiStepSimulationResult
+)
+from simulation.social_network import (
+    SyntheticSocialNetwork,
+    NetworkEdge
+)
+from simulation.interaction import (
+    InteractionTopic,
+    InteractionRecord,
+    StateChangeDelta,
+    InteractionStateEngine
 )
 
 from simulation.persona_schema import (
@@ -60,11 +73,19 @@ __all__ = [
     "GeminiLLMProvider",
     "PersonaCalculatedMetrics",
     "PersonaReasoningOutput",
+    "PersonaInteractionOutput",
     "build_persona_reasoning_prompt",
+    "build_peer_interaction_prompt",
     "SimulationEngine",
-
     "SimulationStepOutput",
     "CohortSimulationResult",
+    "MultiStepSimulationResult",
+    "SyntheticSocialNetwork",
+    "NetworkEdge",
+    "InteractionTopic",
+    "InteractionRecord",
+    "StateChangeDelta",
+    "InteractionStateEngine",
     "AttributeProvenance",
     "GroundedAttributes",
     "DerivedAttributes",

@@ -49,22 +49,26 @@ flowchart LR
 ### Phase 2: Multi-Persona Cohort & Peer Interaction (10 Personas)
 * **Objective:** Introduce demographic diversity and social interaction dynamics.
 * **Key Tasks:**
-  * Generate a representative cohort of 10 student personas across diverse Maharashtra regions (rural/urban, varied family income, caste categories, academic streams).
-  * Implement peer interaction mechanics (word-of-mouth awareness, information sharing, peer nudges).
-  * Implement state transition updates across multi-step simulation rounds.
-  * Build cohort-level metric aggregation (awareness rate, application initiation rate, completion rate).
+  * [x] Generate a representative cohort of 10 student personas using empirical Dhule reference data (rural/urban, varied family income, caste categories, academic streams).
+  * [x] Implement lightweight, deterministic synthetic social graph with bounded degree and homophily.
+  * [x] Implement peer interaction dialogue mechanics (word-of-mouth awareness diffusion, document guidance, administrative warnings).
+  * [x] Implement bounded state transition updates ($[0.0, 1.0]$ clamp) across multi-step simulation cycles ($\text{Observe} \to \text{Reason} \to \text{Interact} \to \text{Act} \to \text{Update}$).
+  * [x] Build multi-step cohort metric tracking and reconciliation.
 
-### Phase 3: Full MVP Delivery (20 Personas, API & Dashboard)
-* **Objective:** Expand to the full 20-persona evaluation suite, expose via FastAPI, and provide an interactive frontend.
+### Phase 3: Full MVP Delivery (Cohorts, API & Dashboard)
+* **Objective:** Connect multi-persona simulation engine to a clean FastAPI service and interactive React frontend.
 * **Key Tasks:**
-  * Scale synthetic cohort to ~20 personas with full edge-case coverage (varying documentation readiness, digital access, parental awareness).
-  * Implement SQLite + SQLAlchemy persistence for simulation runs, persona histories, and aggregated results.
-  * Develop FastAPI backend exposing endpoints for scenario configuration, simulation execution, and results retrieval.
-  * Build React + Vite dashboard displaying:
-    * Policy parameter controls (income caps, subsidy percentages, application deadlines).
-    * Individual persona inspection view (reasoning logs, barriers, decisions).
-    * Cohort analytics and outcome charts (drop-off funnel, demographic disparities).
-    * Assumptions, limitations, and data transparency disclosures.
+  * [x] Formulate structured JSON Data Contract reconciling metadata, aggregates, step metrics, persona states, and peer interactions.
+  * [x] Develop FastAPI backend exposing `/api/health`, `/api/schemes`, `/api/districts`, and `/api/simulate`.
+  * [x] Add offline API test suite validating deterministic policy authority, mathematical reconciliation, and zero secret leakage.
+  * [x] Build React + Vite dashboard displaying:
+    * [x] Simulation controls (cohort size, step count, random seed, stub/Gemini mode toggle).
+    * [x] High-level KPI cards (personas simulated, statutory eligibility count/%, awareness %, expected & realized uptake, fee relief in INR).
+    * [x] Step-by-step diffusion dynamics timeline.
+    * [x] Filterable/searchable persona table with eligibility & state badges.
+    * [x] Modal drawer for deep persona inspection (demographics, fee breakdown, statutory evaluation, AI reasoning monologue, perceived barriers, peer dialogues).
+    * [x] Peer social interaction and word-of-mouth dialogue stream with state deltas.
+  * [ ] Optional SQLite persistence for historical run archiving.
 
 ### Phase 4: Post-MVP Scaling & Validation (Future)
 * **Objective:** Scale population size and introduce statistical benchmarking.

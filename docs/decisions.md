@@ -92,9 +92,55 @@ This document records approved architectural, domain, and technical decisions fo
 
 ---
 
-## 9. Open / Unresolved Items
+## 9. Multi-Persona Social Interaction & Multi-Step Architecture
+
+* **Status:** Approved
+* **Context:** To model peer-to-peer diffusion, word-of-mouth awareness, and informational nudges for government scholarship uptake, personas need reproducible social interactions without unrealistic all-to-all communication or unbounded state drift.
+* **Decisions:**
+  1. **Synthetic Social Graph (`SyntheticSocialNetwork`):**
+     * Lightweight graph with bounded degree (max degree 2–4 per persona for 10-person cohort).
+     * Deterministic and reproducible via explicit random seed.
+     * Plausible homophily weights based on matching district, taluka, and college category.
+     * Strictly synthetic simulation relationships; no self-connections.
+  2. **Structured Interaction Model (`InteractionRecord`):**
+     * Explicit sender/receiver IDs, simulation step, topic (`AWARENESS_DIFFUSION`, `DOCUMENT_HELP`, `APPLICATION_NUDGE`, `GENERAL_QUERY`), sender dialogue, receiver response, and applied state deltas.
+  3. **Strict Policy Separation:**
+     * Gemini/LLM handles persona communication and reasoning grounded in persona attributes.
+     * Deterministic statutory policy rules (`RajarshiShahuPolicyEngine`) remain authoritative for eligibility and statutory benefit calculations.
+  4. **Bounded State Updates (`InteractionStateEngine`):**
+     * State updates (`awareness`, `institutional_trust`, `document_readiness`, `peer_network_support`) are strictly clamped to $[0.0, 1.0]$.
+  5. **Multi-Step Simulation Loop (`run_multistep_cohort`):**
+     * Iterates over configurable steps executing the 5-phase cycle: $\text{Observe} \to \text{Reason} \to \text{Interact} \to \text{Act} \to \text{Update State}$.
+     * Fully backward compatible with single-step cohort execution.
+
+---
+
+## 10. FastAPI Service Layer & React Dashboard Integration
+
+* **Status:** Approved & Implemented
+* **Context:** To allow interactive exploration of the multi-agent policy simulation, a clean API layer and responsive frontend dashboard are required without compromising deterministic policy logic or exposing API secrets.
+* **Decisions:**
+  1. **Strict Client-Server Data Contract:**
+     * Clean JSON DTO schema (`backend/models.py`) separating metadata, aggregate metrics, step-by-step diffusion metrics, persona states/reasoning, social interaction dialogues, and network topology.
+     * All financial relief calculations (`estimated_fee_relief_inr`) and eligibility classifications (`statutory_eligibility`) are computed exclusively by Python engines before serialization.
+  2. **FastAPI Endpoints:**
+     * `GET /api/health`: Service health and provider readiness check.
+     * `GET /api/schemes`: Catalog of supported schemes and ground-truth policy metadata.
+     * `GET /api/districts`: Supported administrative regions with demographic calibration info.
+     * `POST /api/simulate`: Full orchestration endpoint executing deterministic or Gemini-powered multi-step simulations.
+  3. **No Direct Frontend-to-LLM Communication:**
+     * React frontend communicates strictly with FastAPI backend; zero LLM calls or API keys reside in the client.
+  4. **React + Vite Dashboard Architecture:**
+     * Presentation-friendly dashboard with KPI metric cards, step-by-step diffusion timeline, filterable/searchable persona table, detailed persona inspection modal drawer, and peer dialogue feed.
+     * 100% offline development and testing support via deterministic StubLLMProvider by default.
+
+---
+
+## 11. Open / Unresolved Items
 
 * **Status:** Open / Under Research
 1. **Specific Local LLM Engine & Model Size:** Selection of the exact quantized model (e.g., Llama-3-8B / Mistral / Qwen) and serving method (Ollama vs. local runtime vs. API fallback).
 2. **Reference Dataset Files:** Finalizing exact CSV/JSON schemas for Maharashtra district-level college demographics.
 3. **Historical Validation Dataset:** Identifying official scheme audit/disbursement reports to benchmark simulated uptake against historical actuals.
+
+

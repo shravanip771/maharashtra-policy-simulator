@@ -448,3 +448,17 @@ class SyntheticPersonaGenerator:
         profiles = self.generate_population(count=count, id_prefix=id_prefix, start_index=start_index)
         return [p.to_student_persona() for p in profiles]
 
+    def generate_cohort(
+        self,
+        count: int = 10,
+        id_prefix: str = "DHULE-STU",
+        start_index: int = 1,
+        seed: Optional[int] = None
+    ) -> List[StudentPersona]:
+        """Alias for generate_student_population with optional re-seeding."""
+        if seed is not None:
+            self.rng = random.Random(seed)
+            self.seed = seed
+        return self.generate_student_population(count=count, id_prefix=id_prefix, start_index=start_index)
+
+

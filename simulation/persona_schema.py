@@ -159,6 +159,7 @@ class PersonaProfile:
             document_readiness=self.synthetic.document_readiness,
             financial_urgency=self.synthetic.financial_urgency,
             peer_network_support=self.synthetic.peer_network_support,
+            institutional_trust=self.synthetic.institutional_trust,
 
             # Psychology & Agent State
             personality=self.synthetic.personality,
