@@ -1,4 +1,4 @@
-import React, { useState, useEffect, Component } from 'react';
+import React, { useState, Component } from 'react';
 import Header from './components/Header.jsx';
 import Controls from './components/Controls.jsx';
 import KPICards from './components/KPICards.jsx';
@@ -60,8 +60,11 @@ function MainDashboard() {
   const [selectedPersona, setSelectedPersona] = useState(null);
 
   const runSimulation = async () => {
+    if (loading) return;
     setLoading(true);
     setError(null);
+    setSelectedPersona(null);
+
     try {
       const response = await fetch('/api/simulate', {
         method: 'POST',
@@ -86,16 +89,12 @@ function MainDashboard() {
       setSimulationData(data);
     } catch (err) {
       console.error('Simulation run failed:', err);
+      setSimulationData(null);
       setError(err.message || 'Simulation could not be loaded.');
     } finally {
       setLoading(false);
     }
   };
-
-  // Run initial default simulation on mount
-  useEffect(() => {
-    runSimulation();
-  }, []);
 
   const aggregates = simulationData?.aggregate_metrics || null;
   const personas = simulationData?.personas || [];
@@ -135,17 +134,30 @@ function MainDashboard() {
         onRunSimulation={runSimulation}
       />
 
-      {/* 3. SIMULATION RESULTS */}
-      {aggregates && <KPICards aggregates={aggregates} />}
+      {/* INITIAL EMPTY STATE */}
+      {!simulationData && !loading && !error && (
+        <div className="section" style={{ textAlign: 'center', padding: '32px 20px', color: 'var(--text-secondary)' }}>
+          <p style={{ fontSize: '14px', fontWeight: '500' }}>
+            Configure the simulation and click Run Simulation to begin.
+          </p>
+        </div>
+      )}
 
-      {/* 4. PERSONAS */}
-      <PersonaTable
-        personas={personas}
-        onSelectPersona={(p) => setSelectedPersona(p)}
-      />
+      {/* 3. SIMULATION RESULTS (Only displayed after simulation run) */}
+      {simulationData && (
+        <>
+          {aggregates && <KPICards aggregates={aggregates} />}
 
-      {/* 5. AI INTERACTIONS */}
-      <SocialNetwork interactions={interactions} />
+          {/* 4. PERSONAS */}
+          <PersonaTable
+            personas={personas}
+            onSelectPersona={(p) => setSelectedPersona(p)}
+          />
+
+          {/* 5. AI INTERACTIONS */}
+          <SocialNetwork interactions={interactions} />
+        </>
+      )}
 
       {/* PERSONA DETAIL MODAL */}
       {selectedPersona && (
