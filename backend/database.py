@@ -129,4 +129,5 @@ def init_db(target_engine: Engine = engine) -> None:
     Creates all tables defined in Base.metadata against target_engine (safe and idempotent).
     Defaults to the application's global engine, but accepts an isolated test engine.
     """
+    import backend.db_models  # noqa: F401
     Base.metadata.create_all(bind=target_engine)
