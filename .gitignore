@@ -61,6 +61,12 @@ local_settings.py
 db.sqlite3
 db.sqlite3-journal
 
+# Maharashtra Policy Simulator SQLite database files:
+simulator.db
+simulator.db-journal
+*.db
+*.sqlite
+
 # Flask stuff:
 instance/
 .webassets-cache
