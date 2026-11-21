@@ -336,11 +336,16 @@ class SimulationEngine:
         seed: Optional[int] = 42,
         assumed_reimbursement_rate: Optional[float] = None,
         enable_social_interaction: bool = True,
-        max_connections_per_persona: int = 2
+        max_connections_per_persona: int = 2,
+        session: Optional[Any] = None,
+        run_id: Optional[str] = None,
+        policy_id: Optional[int] = None,
+        policy_config_id: Optional[int] = None,
     ) -> "MultiStepSimulationResult":
         """
         Executes a multi-step simulation cycle over a persona cohort:
-        For each step: Observe -> Reason -> Interact -> Act -> Update State.
+        For each step: Observe -> Reason -> Interact -> Act -> Administrative Lifecycle -> Update State.
+        Supports optional relational database and lifecycle service persistence when session is provided.
         """
         from simulation.social_network import SyntheticSocialNetwork
         from simulation.interaction import InteractionRecord, InteractionTopic
@@ -361,6 +366,8 @@ class SimulationEngine:
         persona_map: Dict[str, StudentPersona] = {p.persona_id: p for p in personas}
         interactions_by_step: Dict[int, List[Dict[str, Any]]] = {}
         step_cohort_results: List[CohortSimulationResult] = []
+        lifecycle_apps: Dict[str, Any] = {}
+        lifecycle_step_advancement: Dict[str, int] = {}
 
         # Record initial baseline state
         initial_states: Dict[str, Dict[str, Any]] = {
@@ -429,16 +436,194 @@ class SimulationEngine:
                 updated_metrics = agent.compute_baseline_metrics(policy_eval)
                 reasoning = agent.reason(policy_eval, updated_metrics)
 
-                if not policy_eval.is_eligible:
-                    new_state = SimulationState.REJECTED
-                elif updated_metrics.final_benefit_received:
-                    new_state = SimulationState.BENEFIT_RECEIVED
-                elif updated_metrics.will_attempt_application:
-                    new_state = SimulationState.APPLIED if updated_metrics.will_complete_application else SimulationState.COLLECTING_DOCUMENTS
-                elif updated_metrics.awareness_score > 0.4:
-                    new_state = SimulationState.EVALUATING
+                # Connect administrative application lifecycle if database session and policy context exist
+                if session is not None and policy_id is not None and policy_config_id is not None:
+                    from backend.lifecycle_service import (
+                        create_application,
+                        submit_application,
+                        start_desk_scrutiny,
+                        record_eligibility_evaluation,
+                        approve_application,
+                        disburse_benefit,
+                        reject_application,
+                        ApplicationEvaluationStage,
+                        EvaluationActor,
+                    )
+
+                    app_rec = lifecycle_apps.get(p.persona_id)
+
+                    # 1. Citizen initiates application upon sufficient awareness / document collection
+                    if app_rec is None:
+                        if (
+                            updated_metrics.will_attempt_application
+                            or p.current_state in (
+                                SimulationState.COLLECTING_DOCUMENTS,
+                                SimulationState.APPLIED,
+                                SimulationState.BENEFIT_RECEIVED,
+                            )
+                            or (updated_metrics.awareness_score >= 0.45 and p.document_readiness >= 0.50)
+                        ):
+                            app_rec = create_application(
+                                session=session,
+                                persona_id=p.persona_id,
+                                policy_id=policy_id,
+                                evaluation_policy_config_id=policy_config_id,
+                                claimed_fee_relief_inr=policy_eval.estimated_fee_relief_inr,
+                                is_eligible=policy_eval.is_eligible,
+                                ineligibility_reasons=policy_eval.failure_reasons,
+                                run_id=run_id,
+                                evaluation_notes=f"Application initiated at simulation step {step_idx}",
+                            )
+                            lifecycle_apps[p.persona_id] = app_rec
+                            lifecycle_step_advancement[p.persona_id] = step_idx
+                            # A newly created application MUST remain DRAFT for this step.
+                    else:
+                        # Application was created in a previous step; advance only in subsequent steps
+                        last_advanced_step = lifecycle_step_advancement.get(p.persona_id, 0)
+                        if step_idx > last_advanced_step:
+                            current_status = app_rec.current_status
+
+                            # DRAFT -> SUBMITTED (Citizen files completed application in subsequent step)
+                            if current_status == "DRAFT":
+                                if updated_metrics.will_complete_application or not policy_eval.is_eligible:
+                                    app_rec = submit_application(
+                                        session=session,
+                                        application_id=app_rec.id,
+                                        remarks=f"Application submitted via MahaDBT portal at step {step_idx}",
+                                    )
+                                    lifecycle_apps[p.persona_id] = app_rec
+                                    lifecycle_step_advancement[p.persona_id] = step_idx
+
+                            # SUBMITTED -> UNDER_VERIFICATION (Desk scrutiny commenced in subsequent step)
+                            elif current_status == "SUBMITTED":
+                                app_rec = start_desk_scrutiny(
+                                    session=session,
+                                    application_id=app_rec.id,
+                                    remarks=f"Desk scrutiny commenced by verification officer at step {step_idx}",
+                                )
+                                lifecycle_apps[p.persona_id] = app_rec
+                                lifecycle_step_advancement[p.persona_id] = step_idx
+
+                            # UNDER_VERIFICATION -> APPROVED / REJECTED (Statutory evaluation in subsequent step)
+                            elif current_status == "UNDER_VERIFICATION":
+                                if policy_eval.is_eligible:
+                                    record_eligibility_evaluation(
+                                        session=session,
+                                        application_id=app_rec.id,
+                                        evaluation_stage=ApplicationEvaluationStage.DESK_SCRUTINY,
+                                        is_eligible=True,
+                                        policy_config_id=policy_config_id,
+                                        evaluated_by=EvaluationActor.SCRUTINY_OFFICER,
+                                        evaluation_notes=f"Step {step_idx} statutory eligibility compliance verified",
+                                    )
+                                    app_rec = approve_application(
+                                        session=session,
+                                        application_id=app_rec.id,
+                                        remarks=f"Approved under statutory eligibility criteria at step {step_idx}",
+                                        approved_amount=policy_eval.estimated_fee_relief_inr,
+                                    )
+                                else:
+                                    record_eligibility_evaluation(
+                                        session=session,
+                                        application_id=app_rec.id,
+                                        evaluation_stage=ApplicationEvaluationStage.DESK_SCRUTINY,
+                                        is_eligible=False,
+                                        policy_config_id=policy_config_id,
+                                        evaluated_by=EvaluationActor.SCRUTINY_OFFICER,
+                                        failure_reasons=policy_eval.failure_reasons,
+                                        evaluation_notes=f"Step {step_idx} statutory requirements not satisfied",
+                                    )
+                                    app_rec = reject_application(
+                                        session=session,
+                                        application_id=app_rec.id,
+                                        reason=f"Ineligible at step {step_idx}: {', '.join(policy_eval.failure_reasons)}",
+                                    )
+                                lifecycle_apps[p.persona_id] = app_rec
+                                lifecycle_step_advancement[p.persona_id] = step_idx
+
+                            # APPROVED -> BENEFIT_DISBURSED (Financial DBT execution in subsequent step)
+                            elif current_status == "APPROVED":
+                                if updated_metrics.final_benefit_received and policy_eval.is_eligible:
+                                    payment_ref = f"DBT-MH-{p.persona_id[-6:]}-S{step_idx}"
+                                    app_rec = disburse_benefit(
+                                        session=session,
+                                        application_id=app_rec.id,
+                                        disbursed_amount=policy_eval.estimated_fee_relief_inr,
+                                        payment_reference=payment_ref,
+                                    )
+                                    lifecycle_apps[p.persona_id] = app_rec
+                                    lifecycle_step_advancement[p.persona_id] = step_idx
+
+                    # Derive realized behavioral state strictly confirmed by administrative lifecycle
+                    if app_rec is not None:
+                        if app_rec.current_status == "BENEFIT_DISBURSED":
+                            new_state = SimulationState.BENEFIT_RECEIVED
+                            act_attempted = True
+                            act_completed = True
+                            act_benefit = True
+                        elif app_rec.current_status == "REJECTED":
+                            new_state = SimulationState.REJECTED
+                            act_attempted = True
+                            act_completed = True
+                            act_benefit = False
+                        elif app_rec.current_status in ("APPROVED", "UNDER_VERIFICATION", "RESUBMITTED", "SUBMITTED"):
+                            new_state = SimulationState.APPLIED
+                            act_attempted = True
+                            act_completed = True
+                            act_benefit = False
+                        elif app_rec.current_status == "DRAFT":
+                            new_state = SimulationState.COLLECTING_DOCUMENTS
+                            act_attempted = True
+                            act_completed = False
+                            act_benefit = False
+                        else:
+                            new_state = SimulationState.DROPPED_OUT
+                            act_attempted = False
+                            act_completed = False
+                            act_benefit = False
+                    else:
+                        if not policy_eval.is_eligible:
+                            new_state = SimulationState.REJECTED
+                            act_attempted = False
+                            act_completed = False
+                            act_benefit = False
+                        elif updated_metrics.awareness_score > 0.4:
+                            new_state = SimulationState.EVALUATING
+                            act_attempted = False
+                            act_completed = False
+                            act_benefit = False
+                        else:
+                            new_state = SimulationState.DROPPED_OUT
+                            act_attempted = False
+                            act_completed = False
+                            act_benefit = False
                 else:
-                    new_state = SimulationState.DROPPED_OUT
+                    # In-memory heuristic simulation without persistence
+                    if not policy_eval.is_eligible:
+                        new_state = SimulationState.REJECTED
+                        act_attempted = False
+                        act_completed = False
+                        act_benefit = False
+                    elif updated_metrics.final_benefit_received:
+                        new_state = SimulationState.BENEFIT_RECEIVED
+                        act_attempted = True
+                        act_completed = True
+                        act_benefit = True
+                    elif updated_metrics.will_attempt_application:
+                        new_state = SimulationState.APPLIED if updated_metrics.will_complete_application else SimulationState.COLLECTING_DOCUMENTS
+                        act_attempted = True
+                        act_completed = updated_metrics.will_complete_application
+                        act_benefit = False
+                    elif updated_metrics.awareness_score > 0.4:
+                        new_state = SimulationState.EVALUATING
+                        act_attempted = False
+                        act_completed = False
+                        act_benefit = False
+                    else:
+                        new_state = SimulationState.DROPPED_OUT
+                        act_attempted = False
+                        act_completed = False
+                        act_benefit = False
 
                 p.current_state = new_state
                 p.record_memory(
@@ -475,9 +660,9 @@ class SimulationEngine:
                         application_probability=updated_metrics.application_probability,
                         completion_probability=updated_metrics.completion_probability,
                         expected_uptake_probability=updated_metrics.expected_uptake_probability,
-                        attempted_application=updated_metrics.will_attempt_application,
-                        completed_application=updated_metrics.will_complete_application,
-                        benefit_received=updated_metrics.final_benefit_received,
+                        attempted_application=act_attempted,
+                        completed_application=act_completed,
+                        benefit_received=act_benefit,
                         final_simulation_state=new_state.value,
                         inner_monologue=reasoning.inner_monologue,
                         stated_intention=reasoning.stated_intention,
@@ -495,6 +680,19 @@ class SimulationEngine:
                 assumed_reimbursement_rate=effective_rate
             )
             step_cohort_results.append(step_cohort)
+
+            # Record step temporal state in database if session is provided
+            if session is not None and run_id is not None:
+                from backend.simulation_persistence import SimulationPersistenceAdapter
+                SimulationPersistenceAdapter.record_step_snapshot(
+                    session=session,
+                    run_id=run_id,
+                    step_number=step_idx,
+                    personas=personas,
+                    step_outputs=step_individual_outputs,
+                    interactions=interactions_by_step[step_idx],
+                    step_cohort=step_cohort
+                )
 
         # State evolution summary
         final_states: Dict[str, Dict[str, Any]] = {
@@ -516,6 +714,15 @@ class SimulationEngine:
             f"Social interactions modeled over synthetic degree-bounded peer graph (seed={seed}).",
             f"Deterministic statutory policy evaluation remains authoritative at every step."
         ]
+
+        # Record final individual outcomes in database if session is provided
+        if session is not None and run_id is not None:
+            from backend.simulation_persistence import SimulationPersistenceAdapter
+            SimulationPersistenceAdapter.record_final_outcomes(
+                session=session,
+                run_id=run_id,
+                individual_results=step_cohort_results[-1].individual_results
+            )
 
         return MultiStepSimulationResult(
             cohort_name=cohort_name,
