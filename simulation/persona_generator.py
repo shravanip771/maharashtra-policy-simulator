@@ -181,15 +181,23 @@ EXAMPLE_POPULATION_CONFIG = PopulationDistributionConfig(
 class SyntheticPersonaGenerator:
     """
     Configurable generator that produces synthetic student personas with clear
-    provenance separation.
+    provenance separation. Supports district-specific configurations and multi-district
+    cohort generation across Maharashtra.
     """
 
     def __init__(
         self,
         config: Optional[PopulationDistributionConfig] = None,
-        seed: Optional[int] = None
+        seed: Optional[int] = None,
+        district: Optional[str] = None
     ):
-        self.config = config or EXAMPLE_POPULATION_CONFIG
+        if district is not None and config is None:
+            from simulation.district_config import get_district_population_config
+            self.config = get_district_population_config(district)
+            self.district = district
+        else:
+            self.config = config or EXAMPLE_POPULATION_CONFIG
+            self.district = district or (list(self.config.district_distribution.keys())[0] if self.config.district_distribution else "Maharashtra")
         self.seed = seed
         self._rng = random.Random(seed)
 
@@ -268,6 +276,15 @@ class SyntheticPersonaGenerator:
         prof_prob = self.config.professional_probability_by_level.get(course_level, 0.5)
         is_professional_course = (local_rng.random() < prof_prob)
 
+        # Sample taluka if configured, otherwise default to district
+        taluka = None
+        if getattr(self.config, "taluka_distribution", None):
+            taluka = choose_cat(self.config.taluka_distribution)
+        elif getattr(self.config, "talukas", None):
+            taluka = local_rng.choice(self.config.talukas)
+        else:
+            taluka = district
+
         grounded = GroundedAttributes(
             district=district,
             region_type=region_type,
@@ -277,7 +294,8 @@ class SyntheticPersonaGenerator:
             institution_type=institution_type,
             admission_mode=admission_mode,
             is_professional_course=is_professional_course,
-            course_level=course_level
+            course_level=course_level,
+            taluka=taluka
         )
 
         # 2. CALCULATE DERIVED ATTRIBUTES
@@ -457,8 +475,75 @@ class SyntheticPersonaGenerator:
     ) -> List[StudentPersona]:
         """Alias for generate_student_population with optional re-seeding."""
         if seed is not None:
-            self.rng = random.Random(seed)
+            self._rng = random.Random(seed)
             self.seed = seed
         return self.generate_student_population(count=count, id_prefix=id_prefix, start_index=start_index)
+
+    @classmethod
+    def for_district(
+        cls,
+        district_name: str,
+        seed: Optional[int] = None
+    ) -> "SyntheticPersonaGenerator":
+        """Factory constructor returning a generator configured for a specific district."""
+        from simulation.district_config import get_district_population_config
+        config = get_district_population_config(district_name)
+        return cls(config=config, seed=seed, district=district_name)
+
+    @classmethod
+    def generate_multidistrict_population(
+        cls,
+        district_quotas: Dict[str, int],
+        seed: Optional[int] = 42
+    ) -> List[StudentPersona]:
+        """
+        Generates personas across multiple districts according to the specified quota mapping.
+        E.g., {"Dhule": 50, "Mumbai City": 100, "Kolhapur": 50}.
+        Maintains deterministic execution and globally unique persona IDs.
+        """
+        rng = random.Random(seed)
+        all_students: List[StudentPersona] = []
+
+        for dist_name, count in district_quotas.items():
+            dist_seed = rng.randint(1, 10000000)
+            gen = cls.for_district(dist_name, seed=dist_seed)
+            clean_prefix = dist_name.upper().replace(" ", "_")[:6]
+            students = gen.generate_cohort(
+                count=count,
+                id_prefix=f"{clean_prefix}-STU",
+                start_index=1,
+            )
+            all_students.extend(students)
+
+        return all_students
+
+    @classmethod
+    def generate_state_population(
+        cls,
+        total_count: int = 1000,
+        districts: Optional[List[str]] = None,
+        seed: Optional[int] = 42
+    ) -> List[StudentPersona]:
+        """
+        Generates a state-wide population of N student personas distributed across
+        Maharashtra districts (defaulting to the 18 configured districts).
+        Guarantees exact total count, deterministic reproducibility, and unique IDs.
+        """
+        from simulation.district_config import list_supported_districts
+        target_districts = districts or list_supported_districts()
+        if not target_districts:
+            raise ValueError("No districts provided for state population generation.")
+
+        # Compute balanced quotas across districts, distributing remainder evenly
+        base_quota = total_count // len(target_districts)
+        remainder = total_count % len(target_districts)
+
+        district_quotas: Dict[str, int] = {}
+        for idx, dist in enumerate(target_districts):
+            count = base_quota + (1 if idx < remainder else 0)
+            if count > 0:
+                district_quotas[dist] = count
+
+        return cls.generate_multidistrict_population(district_quotas=district_quotas, seed=seed)
 
 
