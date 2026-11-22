@@ -54,6 +54,7 @@ def _validate_numeric_scalar(
     Validates that a field is a valid finite numeric value.
     Strictly rejects boolean values, non-numeric types, strings, NaN, Infinity,
     and negative values (unless allow_negative is True).
+    Preserves native Python integers exactly without float precision loss.
     """
     if val is None:
         return False, None, f"{field_name} is missing (None)."
@@ -62,21 +63,53 @@ def _validate_numeric_scalar(
     if not isinstance(val, (int, float)):
         return False, None, f"{field_name} must be numeric, got {type(val).__name__} ({val!r})."
 
-    try:
-        if math.isnan(val) or math.isinf(val):
-            return False, None, f"{field_name} is non-finite ({val})."
-        num = float(val)
-    except (OverflowError, ValueError):
-        return False, None, f"{field_name} exceeds representable numeric limits (overflow)."
+    if integer_only:
+        if isinstance(val, int):
+            if not allow_negative and val < 0:
+                return False, None, f"{field_name} cannot be negative ({val})."
+            if max_value is not None and val > max_value:
+                return False, None, f"{field_name} ({val}) exceeds maximum allowed threshold ({max_value})."
+            return True, val, None
+
+        # val is float
+        try:
+            if math.isnan(val) or math.isinf(val):
+                return False, None, f"{field_name} is non-finite ({val})."
+        except (OverflowError, ValueError):
+            return False, None, f"{field_name} exceeds representable numeric limits (overflow)."
+
+        if not val.is_integer():
+            return False, None, f"{field_name} must be a whole integer, got {val}."
+
+        try:
+            int_val = int(val)
+        except (OverflowError, ValueError):
+            return False, None, f"{field_name} exceeds representable numeric limits (overflow)."
+
+        if not allow_negative and int_val < 0:
+            return False, None, f"{field_name} cannot be negative ({val})."
+        if max_value is not None and int_val > max_value:
+            return False, None, f"{field_name} ({int_val}) exceeds maximum allowed threshold ({max_value})."
+        return True, int_val, None
+
+    # Float-valued validation (integer_only=False)
+    if isinstance(val, float):
+        try:
+            if math.isnan(val) or math.isinf(val):
+                return False, None, f"{field_name} is non-finite ({val})."
+            num = val
+        except (OverflowError, ValueError):
+            return False, None, f"{field_name} exceeds representable numeric limits (overflow)."
+    else:  # val is int
+        try:
+            num = float(val)
+        except (OverflowError, ValueError):
+            return False, None, f"{field_name} exceeds representable numeric limits (overflow)."
+
     if not allow_negative and num < 0.0:
         return False, None, f"{field_name} cannot be negative ({val})."
     if max_value is not None and num > max_value:
         return False, None, f"{field_name} ({num}) exceeds maximum allowed threshold ({max_value})."
-    if integer_only:
-        if not num.is_integer():
-            return False, None, f"{field_name} must be a whole integer, got {val}."
-        return True, int(num), None
-
     return True, num, None
 
 
@@ -834,7 +867,6 @@ class RajarshiShahuPolicyEngine:
         # Collect indeterminate data explanations from rule check diagnostics
         indeterminate_reasons: List[str] = []
         for rc in rule_checks:
-            
             if not rc.is_satisfied and (
                 "missing" in rc.message.lower()
                 or "missing" in str(rc.observed_value).lower()

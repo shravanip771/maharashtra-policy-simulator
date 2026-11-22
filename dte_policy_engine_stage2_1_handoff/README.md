@@ -21,19 +21,24 @@ This package contains the completed, self-contained, and deterministic **DTE Sch
    - Early returns cannot bypass monetary validation.
    - Every monetary and rate field inside `FeeComponentBreakdown` is guaranteed to be numeric, finite, non-negative, and not boolean.
    - Any invalid inputs (strings, booleans, NaN, Infinity, negative values, or None) safely default to **₹0.00** without crashes.
-4. **Strict Scalar Data Type Validation:**
+4. **Integer Precision Preservation & Safe Float Handling (Stage 2.2.1 Hotfix Correction):**
+   - In `_validate_numeric_scalar()`, native Python integers are preserved with exact arbitrary precision (including values $> 2^{53}$, e.g. `9007199254740993`) and are **never** converted to float when `integer_only=True`.
+   - Whole-number floats in integer-only mode (e.g. `5.0`) are verified via `.is_integer()` and safely converted to `int`. Fractional floats (e.g. `5.5`) are strictly rejected.
+   - `max_value` thresholds are enforced without unnecessary float conversion of large integers.
+   - Float-valued validation (`integer_only=False`) safely intercepts `OverflowError` and `ValueError` for extreme values (e.g., $10^{1000}$, $-10^{1000}$) and returns controlled failures instead of unhandled exceptions.
+5. **Strict Scalar Data Type Validation:**
    - Numerical scalar fields (`family_income`, `attendance_percentage`, `academic_gap_years`, `family_beneficiaries_count`) strictly reject booleans (`True`/`False`), non-numeric types, strings, `NaN`, and `Infinity`.
-5. **Reconciled Academic Progression (`previous_year_passed`):**
+6. **Reconciled Academic Progression (`previous_year_passed`):**
    - *Continuing Students (`is_first_year=False`):* Must have passed the previous academic college year (`previous_year_passed=True`). Missing (`None`), `False`, or non-boolean types fail.
    - *First-Year Entrants (`is_first_year=True`):* Must have cleared the 12th standard / diploma qualifying entrance examination for admission (`previous_year_passed=True`). Missing (`None`), `False`, or non-boolean types fail.
    - *First-Year Attendance Exemption:* Remains active and exempts fresh entrants from previous-semester college attendance proof regardless of the qualifying exam pass check.
-6. **Strict Override Validation (`assumed_reimbursement_rate`):**
+7. **Strict Override Validation (`assumed_reimbursement_rate`):**
    - Normal evaluation occurs when `assumed_reimbursement_rate is None`.
    - Valid explicit overrides must be a finite numeric value between `0.0` and `1.0` inclusive.
    - Any invalid explicit override (boolean `True`/`False`, string, `NaN`, `Infinity`, $< 0.0$, or $> 1.0$) fails safely, provides diagnostic notices in `statutory_notes` and `indeterminate_reasons`, and sets financial relief to **₹0.00** rather than silently applying an invalid rate or falling back to a default.
-7. **Zero-Relief Ineligibility Guarantee:** Ineligible applicants strictly receive ₹0.00 relief and 0.0 reimbursement rate.
-8. **Preserved 8-Check Contract:** Generates exactly 8 statutory rule check outputs (`RuleCheckResult`), maintaining 100% backward compatibility with downstream persona agents and generators.
-9. **Single-Scheme Focus:** Cross-departmental alternative scholarship routing has been completely omitted. The engine evaluates only the DTE EBC scheme.
+8. **Zero-Relief Ineligibility Guarantee:** Ineligible applicants strictly receive ₹0.00 relief and 0.0 reimbursement rate.
+9. **Preserved 8-Check Contract:** Generates exactly 8 statutory rule check outputs (`RuleCheckResult`), maintaining 100% backward compatibility with downstream persona agents and generators.
+10. **Single-Scheme Focus:** Cross-departmental alternative scholarship routing has been completely omitted. The engine evaluates only the DTE EBC scheme.
 
 ---
 
@@ -47,12 +52,12 @@ dte_policy_engine_stage2_1_handoff/
 │   └── dte_policy_rules.md            # Comprehensive DTE policy specifications and engine interface
 └── simulation/
     ├── policy_rules.py                # Deterministic DTE policy engine implementation
-    ├── test_dte_policy.py             # 30 comprehensive unit tests for the policy engine
+    ├── test_dte_policy.py             # 31 comprehensive unit tests for the policy engine
     └── test_slice.py                  # Phase 1 vertical slice simulation compatibility tests
 ```
 
 - **`simulation/policy_rules.py`**: Contains `RajarshiShahuPolicyEngine`, `DTEPolicyConfig`, `PolicyEvaluationResult`, `FeeComponentBreakdown`, and `RuleCheckResult`.
-- **`simulation/test_dte_policy.py`**: 30 unit tests verifying boundaries, fee separation, female/orphan waivers, attendance exemptions, type rejections, override validation, zero-benefit ineligibility guarantees, and Stage 2.2.1 ineligible fee sanitization regression tests.
+- **`simulation/test_dte_policy.py`**: 31 unit tests verifying boundaries, fee separation, female/orphan waivers, attendance exemptions, type rejections, override validation, zero-benefit ineligibility guarantees, Stage 2.2.1 ineligible fee sanitization, and Stage 2.2.1 integer precision preservation.
 - **`simulation/test_slice.py`**: Regression test ensuring end-to-end compatibility with `SimulationEngine.run_step()`.
 - **`docs/dte_policy_rules.md`**: Complete policy reference, statutory gatekeeping matrix, interface specification, verified test totals (65 tests), and the Simulation Engine integration note.
 - **`MANIFEST_SHA256.txt`**: Cryptographic digests of all package contents.
@@ -93,7 +98,20 @@ python simulation/test_dte_policy.py
 python simulation/test_slice.py
 ```
 
-*Note: All 30 tests in `test_dte_policy.py` and all 3 tests in `test_slice.py` pass with exit code `0`.*
+*Note: All 31 tests in `test_dte_policy.py` and all 3 tests in `test_slice.py` pass with exit code `0`.*
+
+To run the full suite across the project:
+```powershell
+$env:PYTHONPATH="."
+python simulation/test_dte_policy.py
+python simulation/test_slice.py
+python simulation/test_cohort_simulation.py
+python simulation/test_persona_generator.py
+python simulation/test_ai_persona_agent.py
+python simulation/test_social_interaction.py
+python backend/test_api.py
+```
+*Note: All 64 test cases across all 7 test modules executed and passed successfully.*
 
 ---
 
@@ -154,3 +172,41 @@ Get-Content MANIFEST_SHA256.txt | ForEach-Object {
     }
 }
 ```
+
+---
+
+## 7. Stage 2.2.1 Hotfix Correction: Integer Precision Preservation & Verification
+
+### Issue Description
+During technical review, Himani identified an integer precision-loss vulnerability in `_validate_numeric_scalar()`. Converting large native integers directly to float (`num = float(val)`) caused standard IEEE 754 precision loss for values exceeding $2^{53}$ (e.g. `9007199254740993` was coerced to `9007199254740992.0`, losing precision upon integer conversion). Additionally, extremely large numbers (such as $10^{1000}$) raised unhandled `OverflowError` during float conversion.
+
+### Resolution & Corrective Actions
+1. **Preserve Native Integers:** Native Python integers are preserved with exact arbitrary precision and are **never** converted to float when `integer_only=True`.
+2. **Whole-Number Float Handling:** In integer-only mode, floats are checked via `.is_integer()`. Whole numbers (e.g., `5.0`) are safely converted to `int(val)`, while fractional numbers (e.g., `5.5`) are rejected cleanly.
+3. **Threshold Checking Without Conversion:** `max_value` thresholds are evaluated directly against integers without intermediate float conversions that could lose precision.
+4. **Safe Overflow Interception:** In float-valued validation (`integer_only=False`), float conversion is wrapped in `try/except (OverflowError, ValueError)` and returns controlled failures (`is_valid=False`, informative error message) instead of unhandled exceptions.
+
+### Regression Test Suite
+Added `test_stage2_2_1_numeric_scalar_precision_and_validation()` covering 14 distinct cases:
+- Exact assertion for `value = 9007199254740993`: verified `is_valid is True`, `result == value`, `type(result) is int`, `error is None`.
+- Integers exceeding $2^{53}$ (`2**64 - 1`, `2**128 + 7`, $10^{30}$, $10^{100}$).
+- `None`, `True`, and `False` rejection.
+- Numeric strings and unsupported container types.
+- Non-finite numbers (`NaN`, `+inf`, `-inf`).
+- Negative values when `allow_negative=False` vs `allow_negative=True`.
+- Fractional floats in integer-only mode.
+- Whole-number floats in integer-only mode converted to `int`.
+- Ordinary native integers.
+- `max_value` enforcement on large integers without float conversion.
+- Float conversion overflow handling for extreme values ($10^{1000}$, $-10^{1000}$).
+
+### Execution & Verification Results
+- **DTE Test Suite:** 31/31 passed (`simulation/test_dte_policy.py`).
+- **Phase 1 Slice:** 3/3 passed (`simulation/test_slice.py`).
+- **Full Project Suite:** 64/64 passed across 7 test modules.
+- **Archive Invariant:** Original Stage 2.2 baseline archive `dte_policy_engine_stage2_1_handoff.zip` (30,675 bytes, SHA-256 `4ee785ecc743aae623f149b20096e76ad705a78b374bd7720a2161d84f049b23`) remains completely untouched.
+- **Engine Boundary:** `simulation/engine.py` remains untouched.
+
+### Remaining Limitations
+- **Epistemic Status:** Policy rules retain `PROVISIONAL` status pending primary archival of official Government Resolution PDFs.
+- **Cohort Reimbursement Default:** In `simulation/engine.py`, lines 217–221 and 348–352 apply an assumed default rate (`0.50`) unless `assumed_reimbursement_rate=None` is explicitly supplied by callers.
