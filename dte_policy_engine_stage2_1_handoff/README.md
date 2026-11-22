@@ -1,11 +1,11 @@
 # DTE Scholarship Policy Engine — Stage 2.2.1 Hotfix Integration Handoff Package
 
-**Target Recipient:** Himani (Simulation Engine Owner)  
-**Author:** DTE Policy Engine Engineering  
-**Scheme:** Rajarshi Chhatrapati Shahu Maharaj Shikshan Shulk Shishyavrutti Yojna (EBC Scheme)  
-**Department:** Higher & Technical Education Department, Directorate of Technical Education (DTE), Maharashtra State  
-**Policy Version:** `2024.1-provisional`  
-**Verification Status:** `PROVISIONAL` (Awaiting local primary Government Resolution PDF archival)  
+**Target Recipient:** Himani (Simulation Engine Owner)
+**Author:** DTE Policy Engine Engineering
+**Scheme:** Rajarshi Chhatrapati Shahu Maharaj Shikshan Shulk Shishyavrutti Yojna (EBC Scheme)
+**Department:** Higher & Technical Education Department, Directorate of Technical Education (DTE), Maharashtra State
+**Policy Version:** `2024.1-provisional`
+**Verification Status:** `PROVISIONAL` (Awaiting local primary Government Resolution PDF archival)
 
 ---
 
