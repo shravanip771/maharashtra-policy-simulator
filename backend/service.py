@@ -4,7 +4,9 @@ and packages the results into the frontend Data Contract.
 """
 
 import os
-from typing import Dict, List, Any
+import uuid
+from typing import Dict, List, Any, Optional
+from sqlalchemy.orm import Session
 
 from data.dhule_adapter import DhuleEducationDatasetAdapter
 from simulation.persona_generator import SyntheticPersonaGenerator
@@ -29,7 +31,31 @@ class SimulationService:
     """Service orchestrating persona generation, engine simulation, and DTO transformation."""
 
     @classmethod
-    def execute_simulation(cls, req: SimulationRequest) -> SimulationResponse:
+    def execute_simulation(
+        cls,
+        req: SimulationRequest,
+        session: Optional[Session] = None,
+        persist: bool = False
+    ) -> SimulationResponse:
+        """
+        Executes a multi-step simulation run. If persist is True and no session is provided,
+        manages a database transaction boundary using get_db_session().
+        If session is provided, participates in caller's session without committing.
+        """
+        if persist and session is None:
+            from backend.database import get_db_session
+            with get_db_session() as db_session:
+                return cls._execute_simulation_impl(req, session=db_session, persist=True)
+
+        return cls._execute_simulation_impl(req, session=session, persist=persist)
+
+    @classmethod
+    def _execute_simulation_impl(
+        cls,
+        req: SimulationRequest,
+        session: Optional[Session] = None,
+        persist: bool = False
+    ) -> SimulationResponse:
         # 1. Resolve LLM Provider safely (offline stub by default)
         use_gemini = req.use_gemini or (os.getenv("USE_GEMINI", "0").strip() == "1")
         gemini_key = os.getenv("GEMINI_API_KEY", "").strip()
@@ -48,18 +74,69 @@ class SimulationService:
         generator = SyntheticPersonaGenerator(config=config, seed=req.seed)
         cohort = generator.generate_cohort(count=req.cohort_size, seed=req.seed)
 
-        # 3. Execute multi-step engine run
-        engine = SimulationEngine(llm_provider=provider)
-        raw_result: MultiStepSimulationResult = engine.run_multistep_cohort(
-            personas=cohort,
-            total_steps=req.simulation_steps,
-            cohort_name=f"{req.district}-{req.cohort_size}-Persona-Cohort",
-            seed=req.seed,
-            enable_social_interaction=True,
-            max_connections_per_persona=2
-        )
+        # 3. Handle Persistence Preparation if requested
+        run_id: Optional[str] = None
+        policy_id: Optional[int] = None
+        policy_config_id: Optional[int] = None
 
-        # 4. Map Metadata & Provenance
+        if persist and session is not None:
+            from backend.simulation_persistence import SimulationPersistenceAdapter
+            run_id = str(uuid.uuid4())
+            policy, p_config = SimulationPersistenceAdapter.ensure_policy_and_config(session=session)
+            policy_id = policy.id
+            policy_config_id = p_config.id
+
+            # Sync synthetic personas into catalog
+            SimulationPersistenceAdapter.sync_personas(session=session, personas=cohort)
+
+            # Record simulation run initiation
+            SimulationPersistenceAdapter.start_simulation_run(
+                session=session,
+                run_id=run_id,
+                policy_id=policy_id,
+                policy_config_id=policy_config_id,
+                district=req.district,
+                population_size=req.cohort_size,
+                simulation_steps=req.simulation_steps,
+                seed=req.seed,
+                llm_provider=provider_label,
+            )
+
+        # 4. Execute multi-step engine run
+        try:
+            engine = SimulationEngine(llm_provider=provider)
+            raw_result: MultiStepSimulationResult = engine.run_multistep_cohort(
+                personas=cohort,
+                total_steps=req.simulation_steps,
+                cohort_name=f"{req.district}-{req.cohort_size}-Persona-Cohort",
+                seed=req.seed,
+                enable_social_interaction=True,
+                max_connections_per_persona=2,
+                session=session,
+                run_id=run_id,
+                policy_id=policy_id,
+                policy_config_id=policy_config_id,
+            )
+
+            # 5. Finalize Simulation Run in Persistence Adapter
+            if persist and session is not None and run_id is not None:
+                from backend.simulation_persistence import SimulationPersistenceAdapter
+                SimulationPersistenceAdapter.complete_simulation_run(
+                    session=session,
+                    run_id=run_id,
+                    final_cohort=raw_result.final_cohort_result,
+                )
+        except Exception as e:
+            if persist and session is not None and run_id is not None:
+                from backend.db_models import SimulationRunDB, SimulationRunStatus
+                run_rec = session.get(SimulationRunDB, run_id)
+                if run_rec is not None:
+                    run_rec.run_status = SimulationRunStatus.FAILED.value
+                    run_rec.status_message = f"Execution failed: {str(e)}"
+                    session.flush()
+            raise
+
+        # 6. Map Metadata & Provenance
         metadata = SimulationMetadata(
             scheme_name=RajarshiShahuPolicyEngine.SCHEME_NAME,
             scheme_code="RCSMS-EBC",

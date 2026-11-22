@@ -16,6 +16,7 @@ from unittest.mock import patch, MagicMock
 import io
 import os
 import json
+import urllib.error
 
 from simulation.persona import StudentPersona, InstitutionType, AdmissionMode, PersonalityTraits
 from simulation.policy_rules import RajarshiShahuPolicyEngine, PolicyEvaluationResult
@@ -271,6 +272,62 @@ def test_gemini_provider_mock_response_and_statutory_guardrail():
     print("PASS: test_gemini_provider_mock_response_and_statutory_guardrail")
 
 
+def test_gemini_provider_network_failure_fallback_to_stub():
+    """
+    Verifies that when urllib.request.urlopen raises a network failure (URLError: Network unreachable)
+    and fallback_to_stub=True:
+    1. The provider catches the exception and falls back to StubLLMProvider.
+    2. A valid PersonaReasoningOutput is returned.
+    3. The simulation/reasoning does not fail or crash.
+    4. Real network is never accessed.
+    """
+    student = create_sample_student("TEST-GEMINI-NET-FAIL", is_eligible=True)
+    policy_eval = RajarshiShahuPolicyEngine.evaluate_eligibility(student)
+    provider = GeminiLLMProvider(api_key="valid_dummy_key_to_bypass_empty_check", fallback_to_stub=True)
+    agent = PersonaAgent(persona=student, llm_provider=provider)
+    metrics = agent.compute_baseline_metrics(policy_eval)
+
+    # 1. Test persona reasoning fallback under network failure
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Network unreachable")) as mock_urlopen:
+        out = provider.generate_persona_reasoning(student, policy_eval, metrics)
+        assert mock_urlopen.called
+        assert out is not None
+        assert out.persona_id == "TEST-GEMINI-NET-FAIL"
+        assert out.recommended_next_action in ("SUBMIT_APPLICATION", "EVALUATE_FURTHER", "ABANDON_APPLICATION")
+        assert len(out.stated_intention) > 0
+        assert len(out.inner_monologue) > 0
+
+    # 2. Test peer interaction fallback under network failure
+    receiver = create_sample_student("TEST-RECEIVER-NET-FAIL", is_eligible=True)
+    receiver_eval = RajarshiShahuPolicyEngine.evaluate_eligibility(receiver)
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Network unreachable")) as mock_urlopen_dialogue:
+        dialogue = provider.generate_peer_interaction(
+            sender=student,
+            sender_eval=policy_eval,
+            receiver=receiver,
+            receiver_eval=receiver_eval,
+            topic="SCHEME_AWARENESS",
+            step_index=1,
+        )
+        assert mock_urlopen_dialogue.called
+        assert dialogue is not None
+        assert dialogue.sender_id == "TEST-GEMINI-NET-FAIL"
+        assert dialogue.receiver_id == "TEST-RECEIVER-NET-FAIL"
+        assert len(dialogue.sender_message) > 0
+        assert len(dialogue.receiver_response) > 0
+
+    # 3. Test multi-step simulation engine execution with failing Gemini provider
+    engine = SimulationEngine(llm_provider=provider)
+    with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("Network unreachable")):
+        sim_res = engine.run_step(persona=student, step_index=1)
+        assert sim_res is not None
+        assert sim_res.persona_id == "TEST-GEMINI-NET-FAIL"
+        assert sim_res.inner_monologue is not None
+        assert len(sim_res.inner_monologue) > 0
+
+    print("PASS: test_gemini_provider_network_failure_fallback_to_stub")
+
+
 if __name__ == "__main__":
     test_structured_persona_reasoning_schema()
     test_deterministic_eligibility_authority()
@@ -278,5 +335,6 @@ if __name__ == "__main__":
     test_json_extraction_utility()
     test_gemini_provider_offline_initialization_and_safety()
     test_gemini_provider_mock_response_and_statutory_guardrail()
+    test_gemini_provider_network_failure_fallback_to_stub()
     print("All AI Persona Agent tests passed successfully!")
 

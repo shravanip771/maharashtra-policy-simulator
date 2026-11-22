@@ -49,6 +49,7 @@ class GroundedAttributes:
     admission_mode: AdmissionMode            # CAP, Management-Quota, Institute-Level, General-Merit
     is_professional_course: bool             # True for Engineering/Pharmacy/Management, False for general BA/BSc
     course_level: str                        # "Undergraduate", "Postgraduate", "Diploma"
+    taluka: Optional[str] = None             # Specific administrative taluka / subdivision
 
 
 @dataclass
@@ -122,7 +123,7 @@ class PersonaProfile:
         Converts the layered profile into a StudentPersona instance compatible
         with the Phase 1 policy rule engine, agent reasoning, and simulation engine.
         """
-        return StudentPersona(
+        student = StudentPersona(
             # Basic Demographics & Geography
             persona_id=self.derived.persona_id,
             name=self.derived.name,
@@ -165,6 +166,9 @@ class PersonaProfile:
             personality=self.synthetic.personality,
             current_state=SimulationState.UNINFORMED
         )
+        if self.grounded.taluka:
+            student.taluka = self.grounded.taluka
+        return student
 
     def to_dict(self) -> Dict[str, Any]:
         """Returns a nested dictionary representation of the persona profile."""
@@ -216,3 +220,7 @@ class PopulationDistributionConfig:
     # Name sampling pools
     first_names_by_gender: Dict[str, List[str]]
     last_names: List[str]
+
+    # Optional geographic sub-district distributions
+    talukas: Optional[List[str]] = None
+    taluka_distribution: Optional[Dict[str, float]] = None
