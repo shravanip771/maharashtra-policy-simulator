@@ -507,7 +507,7 @@ class SyntheticPersonaGenerator:
         for dist_name, count in district_quotas.items():
             dist_seed = rng.randint(1, 10000000)
             gen = cls.for_district(dist_name, seed=dist_seed)
-            clean_prefix = dist_name.upper().replace(" ", "_")[:6]
+            clean_prefix = "MUMSUB" if dist_name == "Mumbai Suburban" else dist_name.upper().replace(" ", "_")[:6]
             students = gen.generate_cohort(
                 count=count,
                 id_prefix=f"{clean_prefix}-STU",
@@ -526,7 +526,7 @@ class SyntheticPersonaGenerator:
     ) -> List[StudentPersona]:
         """
         Generates a state-wide population of N student personas distributed across
-        Maharashtra districts (defaulting to the 18 configured districts).
+        Maharashtra districts (defaulting to the 36 configured districts).
         Guarantees exact total count, deterministic reproducibility, and unique IDs.
         """
         from simulation.district_config import list_supported_districts
