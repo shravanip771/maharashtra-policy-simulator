@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.models import SimulationRequest, SimulationResponse
 from backend.service import SimulationService
+from backend.auth.router import auth_router
 from simulation.policy_rules import RajarshiShahuPolicyEngine
 
 app = FastAPI(
@@ -17,6 +18,9 @@ app = FastAPI(
     description="Agent-based policy uptake and social interaction simulation engine for Maharashtra education schemes.",
     version="1.0.0"
 )
+
+# Mount authentication router under /api/auth
+app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
 
 # Enable CORS for local React/Vite development
 app.add_middleware(

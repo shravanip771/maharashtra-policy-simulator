@@ -7,7 +7,7 @@ Zero disk footprint: Never writes to or deletes the development database.
 
 from pathlib import Path
 from sqlalchemy import Integer, String, ForeignKey, create_engine, text
-from sqlalchemy.orm import Mapped, mapped_column, sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 from sqlalchemy.pool import StaticPool
 from sqlalchemy.exc import IntegrityError
 
@@ -21,16 +21,23 @@ from backend.database import (
 )
 
 # -----------------------------------------------------------------------------
-# Minimal Temporary ORM Models for Foundation Verification
+# Minimal Temporary ORM Models for Foundation Verification (Isolated Base)
 # -----------------------------------------------------------------------------
-class TestParent(Base):
+class TestModelBase(DeclarativeBase):
+    """Isolated declarative base for temporary test models to avoid polluting Base.metadata."""
+    __test__ = False
+
+
+class TestParent(TestModelBase):
+    __test__ = False
     __tablename__ = "_test_parents"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     name: Mapped[str] = mapped_column(String(50))
 
 
-class TestChild(Base):
+class TestChild(TestModelBase):
+    __test__ = False
     __tablename__ = "_test_children"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -83,12 +90,14 @@ def test_table_creation_in_isolated_database():
     """Verifies that init_db() creates tables against the isolated in-memory engine."""
     test_engine = create_isolated_test_engine()
     init_db(target_engine=test_engine)
+    TestModelBase.metadata.create_all(bind=test_engine)
 
     with test_engine.connect() as conn:
         # Check that test tables exist in sqlite_master
         tables = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table'")).scalars().all()
         assert "_test_parents" in tables
         assert "_test_children" in tables
+        assert "policies" in tables
     print("PASS: test_table_creation_in_isolated_database")
 
 
@@ -96,6 +105,7 @@ def test_foreign_key_constraint_blocks_orphaned_records():
     """Verifies that SQLite strictly blocks inserting child rows with invalid parent IDs."""
     test_engine = create_isolated_test_engine()
     init_db(target_engine=test_engine)
+    TestModelBase.metadata.create_all(bind=test_engine)
 
     test_factory = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
 
@@ -126,6 +136,7 @@ def test_session_context_manager_commit_and_rollback():
     """Verifies that get_db_session commits valid transactions and rolls back on error."""
     test_engine = create_isolated_test_engine()
     init_db(target_engine=test_engine)
+    TestModelBase.metadata.create_all(bind=test_engine)
 
     test_factory = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
 
@@ -157,6 +168,7 @@ def test_get_db_generator_lifecycle():
     """Verifies that get_db() yields a functional session and closes it on exit."""
     test_engine = create_isolated_test_engine()
     init_db(target_engine=test_engine)
+    TestModelBase.metadata.create_all(bind=test_engine)
 
     test_factory = sessionmaker(bind=test_engine, autocommit=False, autoflush=False)
 
