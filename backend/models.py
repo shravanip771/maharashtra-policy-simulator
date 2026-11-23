@@ -57,6 +57,22 @@ class SimulationRequest(BaseModel):
     counterfactual_params: Optional[CounterfactualPolicyParams] = Field(default=None, description="Configurable policy parameters for 'counterfactual' mode")
     counterfactual_config: Optional[Dict[str, Any]] = Field(default=None, description="Alternative dictionary payload for counterfactual policy parameters")
 
+    @field_validator("district")
+    @classmethod
+    def validate_supported_district(cls, v: Any) -> str:
+        if v is None:
+            return "Dhule"
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("District name must be a non-empty string.")
+        from simulation.district_config import list_supported_districts
+        supported = list_supported_districts()
+        matched = next((d for d in supported if d.lower() == v.strip().lower()), None)
+        if not matched:
+            raise ValueError(
+                f"District '{v}' is not supported. Supported districts: {', '.join(supported)}"
+            )
+        return matched
+
     @field_validator("override_reimbursement_rate", "assumed_reimbursement_rate", mode="before")
     @classmethod
     def reject_bool_override_rate(cls, v: Any, info) -> Any:
