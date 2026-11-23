@@ -76,6 +76,11 @@ class StudentPersona:
     current_state: SimulationState = SimulationState.UNINFORMED
     memory: List[Dict[str, Any]] = field(default_factory=list)
 
+    # DTE policy compatibility fields (Safe defaults for backward compatibility)
+    annual_exam_fee: float = 0.0
+    is_first_year: bool = False
+    is_orphan: bool = False
+
     def record_memory(self, step: int, event_type: str, details: Dict[str, Any]) -> None:
         """Appends a trace event to the persona's state memory."""
         self.memory.append({

@@ -149,6 +149,21 @@ class FeeComponentBreakdown:
             else:
                 setattr(self, field_name, float(valid_val))
 
+    @property
+    def net_payable_tuition_fee(self) -> float:
+        """Net tuition fee payable by student after applying calculated fee relief."""
+        return round(max(0.0, self.annual_tuition_fee - self.tuition_fee_relief_inr), 2)
+
+    @property
+    def net_payable_exam_fee(self) -> float:
+        """Net examination fee payable by student after applying calculated fee relief."""
+        return round(max(0.0, self.annual_exam_fee - self.exam_fee_relief_inr), 2)
+
+    @property
+    def total_net_payable_fee(self) -> float:
+        """Total net fees payable by student after applying all fee concessions."""
+        return round(max(0.0, (self.annual_tuition_fee + self.annual_exam_fee) - self.total_fee_relief_inr), 2)
+
 
 @dataclass
 class DTEPolicyConfig:
@@ -232,6 +247,21 @@ class PolicyEvaluationResult:
     scholarship_route: str = ScholarshipRoute.DTE_EBC.value
     alternate_scheme_name: Optional[str] = None
     routing_reason: Optional[str] = None
+
+    @property
+    def net_payable_tuition_fee(self) -> float:
+        """Net tuition fee payable after applying tuition relief."""
+        return self.fee_breakdown.net_payable_tuition_fee if self.fee_breakdown else 0.0
+
+    @property
+    def net_payable_exam_fee(self) -> float:
+        """Net examination fee payable after applying exam relief."""
+        return self.fee_breakdown.net_payable_exam_fee if self.fee_breakdown else 0.0
+
+    @property
+    def total_net_payable_fee(self) -> float:
+        """Total net fees payable after applying all relief."""
+        return self.fee_breakdown.total_net_payable_fee if self.fee_breakdown else 0.0
 
 
 class RajarshiShahuPolicyEngine:
@@ -769,6 +799,15 @@ class RajarshiShahuPolicyEngine:
         else:
             exam_rate = cfg.male_exam_rate
             fam_inc = getattr(persona, "family_income", 0.0) or 0.0
+
+            # Explicit epistemic marking for male exam-fee relief assumption
+            statutory_notes.append(
+                f"PROVISIONAL ASSUMPTION: Male candidate receives {exam_rate*100:.0f}% Exam Fee reimbursement. "
+                f"Notice: This 50% male exam-fee relief is an UNVERIFIED / PROVISIONAL assumption pending local primary GR confirmation."
+            )
+            benefit_assumptions.append(
+                f"PROVISIONAL ASSUMPTION: 50% examination fee relief for male candidates is provisional and awaiting verified primary GR confirmation."
+            )
 
             # Tier 1: Income <= INR 2.50 Lakh
             if fam_inc <= cfg.income_slab_lower:
