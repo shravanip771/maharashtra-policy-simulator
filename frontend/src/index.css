@@ -1,0 +1,1130 @@
+/* ==========================================================================
+   MAHARASHTRA POLICY SIMULATOR — DESIGN SYSTEM & TOKENS
+   Visual Reference: Maharashtra_Policy_Simulator_–_Policy_Simulator_(2).html
+   ========================================================================== */
+
+:root {
+  /* Surfaces & Backgrounds */
+  --bg-canvas: #F5F4F0;                /* Warm off-white public/content background */
+  --bg-card: #FFFFFF;                  /* Crisp white card surface */
+  --bg-card-subtle: #FAF9F5;           /* Light tinted card secondary */
+  --bg-dark: #0E1218;                  /* Deep navy/black surface for map & hero banners */
+  --bg-dark-deep: #05070A;             /* Near-black for global header and intro */
+  --bg-dark-abyss: #030406;            /* Abyss black for splash screen */
+  --bg-dark-card: #151B24;             /* Elevated dark card */
+  --bg-dark-hover: #1D2430;            /* Dark surface hover state */
+
+  /* Borders & Dividers */
+  --border-light: #E2E0D8;             /* Standard light card border */
+  --border-subtle: #C9C6BC;            /* Input and secondary border */
+  --border-dark: #232A36;              /* Dark container border */
+  --border-header: #1D222B;            /* Header bottom border */
+  --border-focus: #6AA6FF;             /* Accessible focus ring */
+
+  /* Brand Primary & Accents (Terracotta / Amber) */
+  --accent-terracotta: #C2570C;        /* Signature terracotta orange primary action */
+  --accent-terracotta-hover: #9E4407;  /* Terracotta hover */
+  --accent-terracotta-dark: #8F3F07;   /* Pressed / dark terracotta */
+  --accent-amber: #F2A65A;             /* Warm amber for brand badge & map glow */
+  --accent-amber-light: #FFD9A8;       /* Highlight amber */
+  --accent-amber-glow: rgba(242, 166, 90, 0.25);
+
+  /* Sentiments & Policy Status Tokens */
+  --sentiment-support: #1F5FBF;        /* Leaning support primary blue */
+  --sentiment-support-bright: #6AA6FF; /* Highlight support blue */
+  --sentiment-support-bg: rgba(31, 95, 191, 0.08);
+
+  --sentiment-neutral: #B5B8C0;        /* Neutral / undecided muted grey */
+  --sentiment-neutral-bright: #A8AEBB; /* Neutral bright */
+  --sentiment-neutral-bg: rgba(181, 184, 192, 0.12);
+
+  --sentiment-concern: #FF9A57;        /* Concern / oppose soft orange */
+  --sentiment-concern-dark: #E06A26;   /* Concern strong */
+  --sentiment-concern-bg: rgba(255, 154, 87, 0.12);
+
+  /* Typography Colors */
+  --text-primary-light: #1A1D20;       /* High-contrast dark text on light canvas */
+  --text-secondary-light: #5A6270;     /* Supporting body text on light canvas */
+  --text-muted-light: #7E8794;         /* Inactive / caption text on light canvas */
+
+  --text-primary-dark: #FFFFFF;        /* Pure white heading text on dark canvas */
+  --text-secondary-dark: #B4BAC6;      /* Secondary grey text on dark canvas */
+  --text-muted-dark: #7E8794;          /* Dimmed captions on dark canvas */
+
+  /* Typography Families */
+  --font-display: 'Space Grotesk', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-body: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+
+  /* Typography Sizes */
+  --text-xs: 12px;
+  --text-sm: 13px;
+  --text-base: 14px;
+  --text-md: 15px;
+  --text-lg: 17px;
+  --text-xl: 20px;
+  --text-2xl: 24px;
+  --text-3xl: 32px;
+  --text-4xl: 46px;
+  --text-hero: 56px;
+
+  /* Spacing Scale */
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-10: 40px;
+  --space-12: 48px;
+  --space-14: 56px;
+
+  /* Radii */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 20px;
+  --radius-pill: 999px;
+
+  /* Shadows & Elevations */
+  --shadow-subtle: 0 1px 3px rgba(0, 0, 0, 0.04), 0 1px 2px rgba(0, 0, 0, 0.02);
+  --shadow-card: 0 4px 16px rgba(0, 0, 0, 0.05);
+  --shadow-dark: 0 8px 32px rgba(0, 0, 0, 0.35);
+  --shadow-glow: 0 0 24px rgba(242, 166, 90, 0.20);
+
+  /* Transitions */
+  --transition-fast: 150ms ease;
+  --transition-normal: 250ms ease;
+  --transition-smooth: 350ms cubic-bezier(0.16, 1, 0.3, 1);
+
+  /* Layout Containers */
+  --max-content-width: 1280px;
+}
+
+/* ==========================================================================
+   GLOBAL RESETS & ACCESSIBILITY (From Prototype Reference)
+   ========================================================================== */
+
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html, body {
+  background-color: var(--bg-canvas);
+  color: var(--text-primary-light);
+  font-family: var(--font-body);
+  font-size: var(--text-base);
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  min-height: 100vh;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  background: none;
+  transition: all var(--transition-fast);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+/* Prototype Accessible Focus Ring */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+a:focus-visible {
+  outline: 3px solid var(--border-focus);
+  outline-offset: 2px;
+}
+
+/* Range input accent */
+input[type=range] {
+  accent-color: var(--accent-terracotta);
+  width: 100%;
+}
+
+/* ==========================================================================
+   KEYFRAME ANIMATIONS (Exact from Prototype Style 1)
+   ========================================================================== */
+
+@keyframes psDraw {
+  to { stroke-dashoffset: 0; }
+}
+
+@keyframes psFill {
+  to { fill-opacity: 0.10; }
+}
+
+@keyframes psPop {
+  from { opacity: 0; transform: scale(0); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes psFade {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: none; }
+}
+
+@keyframes psOut {
+  to { opacity: 0; }
+}
+
+@keyframes psPulse {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.5); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+/* ==========================================================================
+   APPLICATION SHELL & NAVIGATION
+   ========================================================================== */
+
+.ps-shell {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Global Sticky Header */
+.ps-header {
+  background: var(--bg-dark-deep);
+  border-bottom: 1px solid var(--border-header);
+  position: sticky;
+  top: 0;
+  z-index: 1000;
+}
+
+.ps-header-inner {
+  max-width: var(--max-content-width);
+  margin: 0 auto;
+  padding: 12px 24px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ps-brand-group {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  text-decoration: none;
+}
+
+.ps-brand-icon {
+  width: 34px;
+  height: 34px;
+  flex-shrink: 0;
+}
+
+.ps-brand-title {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: var(--text-lg);
+  line-height: 1.2;
+  color: var(--text-primary-dark);
+  letter-spacing: -0.01em;
+}
+
+.ps-brand-subtitle {
+  font-size: var(--text-xs);
+  color: var(--text-secondary-dark);
+}
+
+.ps-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.ps-user-badge {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ps-avatar-initial {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: var(--accent-amber);
+  color: var(--bg-dark-deep);
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+
+.ps-user-name {
+  font-weight: 500;
+  font-size: var(--text-base);
+  color: var(--text-primary-dark);
+}
+
+.ps-btn-header {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: 1.5px solid #6B7280;
+  color: var(--text-primary-dark);
+  font-size: var(--text-base);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ps-btn-header:hover {
+  background: rgba(255, 255, 255, 0.08);
+  border-color: #9CA3AF;
+}
+
+/* Main Content Container */
+.ps-main-container {
+  max-width: var(--max-content-width);
+  width: 100%;
+  margin: 0 auto;
+  padding: 24px 24px 56px;
+  animation: psFade 0.6s ease both;
+  flex: 1;
+}
+
+/* 3-Step Process Stepper */
+.ps-stepper {
+  list-style: none;
+  margin: 0 0 20px;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.ps-step-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px 8px 8px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-base);
+  font-weight: 600;
+  transition: all var(--transition-fast);
+}
+
+.ps-step-item.is-active {
+  background: #FFF7ED;
+  border: 1.5px solid #FDBA74;
+  color: #9A3412;
+}
+
+.ps-step-item.is-pending {
+  background: #FFFFFF;
+  border: 1.5px solid var(--border-light);
+  color: var(--text-secondary-light);
+}
+
+.ps-step-num {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--text-sm);
+  font-weight: 700;
+}
+
+.ps-step-item.is-active .ps-step-num {
+  background: var(--accent-terracotta);
+  color: #FFFFFF;
+}
+
+.ps-step-item.is-pending .ps-step-num {
+  background: #E5E7EB;
+  color: #4B5563;
+}
+
+/* ==========================================================================
+   CARDS, PANELS & SURFACES
+   ========================================================================== */
+
+/* Standard Light Card */
+.ps-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  box-shadow: var(--shadow-subtle);
+  margin-bottom: 20px;
+}
+
+/* Dark Showcase Panel (For Map & Hero Visualization) */
+.ps-card-dark {
+  background: var(--bg-dark);
+  border: 1px solid var(--border-dark);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  box-shadow: var(--shadow-dark);
+  margin-bottom: 24px;
+  color: var(--text-primary-dark);
+}
+
+.ps-section-header {
+  margin-bottom: 16px;
+}
+
+.ps-section-title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--text-primary-light);
+  letter-spacing: -0.01em;
+}
+
+.ps-section-title-dark {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--text-primary-dark);
+  letter-spacing: -0.01em;
+}
+
+.ps-section-subtitle {
+  font-size: var(--text-base);
+  color: var(--text-secondary-light);
+  margin-top: 4px;
+}
+
+.ps-section-subtitle-dark {
+  font-size: var(--text-base);
+  color: var(--text-secondary-dark);
+  margin-top: 4px;
+}
+
+/* Primary Terracotta Action Button */
+.ps-btn-primary {
+  min-height: 44px;
+  padding: 0 24px;
+  border-radius: var(--radius-md);
+  background: var(--accent-terracotta);
+  color: #FFFFFF;
+  font-size: var(--text-base);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.08);
+  border: 1px solid rgba(0, 0, 0, 0.05);
+}
+
+.ps-btn-primary:hover:not(:disabled) {
+  background: var(--accent-terracotta-hover);
+}
+
+.ps-btn-primary:active:not(:disabled) {
+  background: var(--accent-terracotta-dark);
+}
+
+/* Outline / Secondary Button */
+.ps-btn-secondary {
+  min-height: 44px;
+  padding: 0 20px;
+  border-radius: var(--radius-md);
+  background: var(--bg-card);
+  color: var(--text-primary-light);
+  border: 1.5px solid var(--border-light);
+  font-size: var(--text-base);
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.ps-btn-secondary:hover:not(:disabled) {
+  background: var(--bg-card-subtle);
+  border-color: var(--border-subtle);
+}
+
+/* Badges and Chips */
+.ps-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.ps-chip-support {
+  background: var(--sentiment-support-bg);
+  color: var(--sentiment-support);
+  border: 1px solid rgba(31, 95, 191, 0.2);
+}
+
+.ps-chip-neutral {
+  background: var(--sentiment-neutral-bg);
+  color: #4B5563;
+  border: 1px solid rgba(181, 184, 192, 0.3);
+}
+
+.ps-chip-concern {
+  background: var(--sentiment-concern-bg);
+  color: var(--sentiment-concern-dark);
+  border: 1px solid rgba(255, 154, 87, 0.3);
+}
+
+.ps-chip-provisional {
+  background: #FEF3C7;
+  color: #92400E;
+  border: 1px solid #FCD34D;
+}
+
+/* ==========================================================================
+   SHELL FOOTER & EPISTEMIC BANNER
+   ========================================================================== */
+
+.ps-footer {
+  margin-top: auto;
+  border-top: 1px solid var(--border-light);
+  padding: 24px;
+  background: #FFFFFF;
+}
+
+.ps-footer-inner {
+  max-width: var(--max-content-width);
+  margin: 0 auto;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  font-size: var(--text-xs);
+  color: var(--text-muted-light);
+}
+
+.ps-footer-disclaimer {
+  max-width: 760px;
+  line-height: 1.4;
+}
+
+/* ==========================================================================
+   RESPONSIVE DESIGN SYSTEM BREAKPOINTS
+   Desktop: 1440px | Tablet: 768px | Mobile: 390px
+   ========================================================================== */
+
+/* Tablet (768px and down) */
+@media (max-width: 768px) {
+  .ps-main-container {
+    padding: 16px 16px 40px;
+  }
+
+  .ps-header-inner {
+    padding: 10px 16px;
+  }
+
+  .ps-brand-title {
+    font-size: var(--text-md);
+  }
+
+  .ps-stepper {
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .ps-step-item {
+    width: 100%;
+  }
+
+  .ps-card-dark {
+    padding: 16px;
+  }
+
+  .ps-footer {
+    padding: 16px;
+  }
+
+  .ps-footer-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+/* Mobile (390px and down) */
+@media (max-width: 480px) {
+  .ps-header-inner {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .ps-header-actions {
+    width: 100%;
+    justify-content: space-between;
+  }
+
+  .ps-card {
+    padding: 16px;
+    border-radius: var(--radius-md);
+  }
+
+  .ps-btn-primary,
+  .ps-btn-secondary {
+    width: 100%;
+  }
+}
+
+/* ==========================================================================
+   PRESERVATION OF EXISTING COMPONENT HOOKS
+   Ensures Controls, KPICards, PersonaTable, PersonaDetail, and SocialNetwork
+   continue to function seamlessly within the upgraded design tokens.
+   ========================================================================== */
+
+.app-container {
+  max-width: var(--max-content-width);
+  margin: 0 auto;
+}
+
+.section {
+  background: var(--bg-card);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-subtle);
+}
+
+.section-title {
+  font-family: var(--font-display);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--text-primary-light);
+}
+
+.section-subtitle {
+  font-size: var(--text-base);
+  color: var(--text-secondary-light);
+  margin-top: 4px;
+}
+
+.controls-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+  align-items: flex-end;
+}
+
+.control-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.control-label {
+  font-size: var(--text-sm);
+  font-weight: 600;
+  color: var(--text-secondary-light);
+}
+
+.control-input, .control-select {
+  height: 42px;
+  padding: 0 12px;
+  border-radius: var(--radius-md);
+  border: 1.5px solid var(--border-subtle);
+  background: #FFFFFF;
+  font-size: var(--text-base);
+  font-family: inherit;
+  color: var(--text-primary-light);
+}
+
+.btn-primary {
+  height: 42px;
+  padding: 0 20px;
+  border-radius: var(--radius-md);
+  background: var(--accent-terracotta);
+  color: #FFFFFF;
+  font-weight: 600;
+  font-size: var(--text-base);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: all var(--transition-fast);
+}
+
+.btn-primary:hover:not(:disabled) {
+  background: var(--accent-terracotta-hover);
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.kpi-card {
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 16px;
+}
+
+.kpi-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-muted-light);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.kpi-value {
+  font-family: var(--font-display);
+  font-size: var(--text-2xl);
+  font-weight: 700;
+  color: var(--text-primary-light);
+  margin-top: 4px;
+}
+
+.kpi-desc {
+  font-size: var(--text-xs);
+  color: var(--text-secondary-light);
+  margin-top: 6px;
+}
+
+.table-wrapper {
+  overflow-x: auto;
+  margin-top: 16px;
+}
+
+.persona-table {
+  width: 100%;
+  border-collapse: collapse;
+  text-align: left;
+}
+
+.persona-table th {
+  background: var(--bg-card-subtle);
+  padding: 10px 14px;
+  font-size: var(--text-xs);
+  font-weight: 600;
+  color: var(--text-secondary-light);
+  border-bottom: 1px solid var(--border-light);
+}
+
+.persona-table td {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border-light);
+  font-size: var(--text-base);
+}
+
+.persona-table tbody tr {
+  cursor: pointer;
+  transition: background var(--transition-fast);
+}
+
+.persona-table tbody tr:hover {
+  background: var(--bg-card-subtle);
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(5, 7, 10, 0.65);
+  backdrop-filter: blur(4px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 2000;
+  padding: 20px;
+}
+
+.modal-content {
+  background: #FFFFFF;
+  border-radius: var(--radius-lg);
+  max-width: 640px;
+  width: 100%;
+  padding: 24px;
+  box-shadow: var(--shadow-dark);
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.modal-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+.modal-title {
+  font-family: var(--font-display);
+  font-size: var(--text-xl);
+  font-weight: 700;
+  color: var(--text-primary-light);
+}
+
+.btn-close {
+  font-size: 24px;
+  color: var(--text-muted-light);
+  line-height: 1;
+}
+
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.detail-item {
+  display: flex;
+  flex-direction: column;
+}
+
+.detail-label {
+  font-size: var(--text-xs);
+  color: var(--text-muted-light);
+  font-weight: 500;
+}
+
+.detail-value {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text-primary-light);
+}
+
+.reasoning-box {
+  background: var(--bg-card-subtle);
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  padding: 14px;
+  margin-top: 12px;
+}
+
+.reasoning-title {
+  font-size: var(--text-xs);
+  font-weight: 700;
+  text-transform: uppercase;
+  color: var(--text-muted-light);
+  margin-bottom: 4px;
+}
+
+.reasoning-text {
+  font-style: italic;
+  color: var(--text-secondary-light);
+  font-size: var(--text-base);
+}
+
+/* ==========================================================================
+   INTERACTIVE MAHARASHTRA DISTRICT MAP (STEP 3)
+   ========================================================================== */
+
+.ps-map-wrapper {
+  position: relative;
+  overflow: hidden;
+}
+
+.ps-map-header {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+
+.ps-map-dropdown-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.ps-map-stage {
+  position: relative;
+  width: 100%;
+  max-width: 1120px;
+  margin: 0 auto;
+  aspect-ratio: 860 / 650;
+  background: #07090D;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  padding: 0;
+}
+
+.ps-map-svg {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+/* Voronoi District Cells */
+.ps-district-cell {
+  cursor: pointer;
+  outline: none;
+  transition: fill 180ms ease, stroke 180ms ease, stroke-width 180ms ease;
+}
+
+.ps-district-cell:hover {
+  filter: drop-shadow(0 0 6px rgba(242, 166, 90, 0.4));
+}
+
+.ps-district-cell:focus-visible {
+  stroke: var(--border-focus) !important;
+  stroke-width: 2.5px !important;
+}
+
+/* Watermarks */
+.ps-watermark {
+  position: absolute;
+  pointer-events: none;
+  user-select: none;
+  font-family: var(--font-body);
+}
+
+.ps-wm-sea {
+  left: 2%;
+  top: 58%;
+  font-size: 13px;
+  font-style: italic;
+  color: #8FB0C8;
+  letter-spacing: 0.08em;
+}
+
+.ps-wm-gujarat {
+  left: 3%;
+  top: 4%;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #9AA1AE;
+}
+
+.ps-wm-mp {
+  left: 44%;
+  top: 2.5%;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #9AA1AE;
+}
+
+.ps-wm-cg {
+  right: 1.5%;
+  top: 24%;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #9AA1AE;
+}
+
+.ps-wm-tg {
+  right: 3%;
+  top: 62%;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #9AA1AE;
+}
+
+.ps-wm-ka {
+  left: 30%;
+  bottom: 2.5%;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.1em;
+  color: #9AA1AE;
+}
+
+/* Compass Rose */
+.ps-compass {
+  position: absolute;
+  right: 16px;
+  bottom: 16px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #9AA1AE;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* District Pins (Matching Prototype buttons) */
+.ps-map-pin-btn {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  background: none;
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 10;
+  transition: transform 150ms ease;
+}
+
+.ps-map-pin-btn:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+  z-index: 20;
+}
+
+.ps-map-pin-btn:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 4px;
+  border-radius: 50%;
+}
+
+.ps-pin-dot {
+  display: block;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  transition: all 150ms ease;
+}
+
+.ps-pin-pulse {
+  animation: psPulse 2s infinite ease-in-out;
+}
+
+.ps-pin-chip {
+  position: absolute;
+  white-space: nowrap;
+  background: #12161D;
+  border: 1px solid rgba(255, 255, 255, 0.18);
+  border-radius: 6px;
+  padding: 1px 7px;
+  font-size: 11px;
+  line-height: 18px;
+  font-weight: 600;
+  color: #FFFFFF;
+  pointer-events: none;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.4);
+  transition: all 150ms ease;
+}
+
+.ps-pin-chip.is-selected {
+  border-color: var(--accent-amber);
+  background: #1C222D;
+  color: #FFFFFF;
+  box-shadow: 0 0 10px rgba(242, 166, 90, 0.4);
+}
+
+.ps-pin-chip.is-dhule {
+  border-color: rgba(242, 166, 90, 0.5);
+  color: #FFD9A8;
+}
+
+/* District Inspector Card */
+.ps-district-inspector {
+  margin-top: 18px;
+  padding: 16px 20px;
+  background: #12161D;
+  border: 1px solid var(--border-dark);
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.ps-inspector-main {
+  flex: 1;
+  min-width: 280px;
+}
+
+.ps-inspector-title-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.ps-inspector-action {
+  min-width: 200px;
+}
+
+/* Responsive Map Adjustments */
+@media (max-width: 768px) {
+  .ps-pin-chip {
+    display: none;
+  }
+
+  .ps-pin-chip.is-selected,
+  .ps-pin-chip.is-dhule {
+    display: inline-block;
+    font-size: 10px;
+    padding: 0 5px;
+    line-height: 16px;
+  }
+
+  .ps-map-pin-btn {
+    width: 24px;
+    height: 24px;
+  }
+
+  .ps-pin-dot {
+    width: 10px;
+    height: 10px;
+  }
+
+  .ps-district-inspector {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .ps-inspector-action {
+    width: 100%;
+  }
+}
+
+@media (max-width: 480px) {
+  .ps-map-pin-btn {
+    width: 20px;
+    height: 20px;
+  }
+
+  .ps-pin-dot {
+    width: 8px;
+    height: 8px;
+  }
+
+  .ps-pin-chip.is-selected,
+  .ps-pin-chip.is-dhule {
+    font-size: 9px;
+    padding: 0 4px;
+    line-height: 14px;
+  }
+
+  .ps-watermark {
+    font-size: 9px;
+  }
+}
