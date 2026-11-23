@@ -69,10 +69,30 @@ class SimulationService:
             provider_label = "Deterministic Rule-Grounded Stub (Offline)"
 
         # 2. Generate grounded synthetic cohort
-        adapter = DhuleEducationDatasetAdapter()
-        config = adapter.create_population_config()
-        generator = SyntheticPersonaGenerator(config=config, seed=req.seed)
-        cohort = generator.generate_cohort(count=req.cohort_size, seed=req.seed)
+        from simulation.district_config import (
+            list_supported_districts,
+            get_district_profile,
+        )
+        target_district = (req.district or "Dhule").strip()
+        supported_districts = list_supported_districts()
+        matched_district = next((d for d in supported_districts if d.lower() == target_district.lower()), None)
+        if not matched_district:
+            raise ValueError(
+                f"District '{target_district}' is not supported. Supported districts: {', '.join(supported_districts)}"
+            )
+        target_district = matched_district
+        district_profile = get_district_profile(target_district)
+
+        if target_district == "Dhule":
+            # Preserve existing empirical Dhule adapter behavior and backward compatibility
+            adapter = DhuleEducationDatasetAdapter()
+            config = adapter.create_population_config()
+            generator = SyntheticPersonaGenerator(config=config, seed=req.seed, district="Dhule")
+            cohort = generator.generate_cohort(count=req.cohort_size, seed=req.seed, id_prefix="DHULE-STU")
+        else:
+            generator = SyntheticPersonaGenerator.for_district(target_district, seed=req.seed)
+            clean_prefix = "MUMSUB" if target_district == "Mumbai Suburban" else target_district.upper().replace(" ", "_")[:6]
+            cohort = generator.generate_cohort(count=req.cohort_size, seed=req.seed, id_prefix=f"{clean_prefix}-STU")
 
         # 3. Handle Persistence Preparation if requested
         run_id: Optional[str] = None
@@ -186,20 +206,30 @@ class SimulationService:
         else:
             provisional_notes = []
 
+        if target_district == "Dhule":
+            disclaimer_text = (
+                "Ground-truth demographics derived from official 2010-11 Dhule Educational Census table. "
+                "Behavioral attributes, network ties, and dialogue are synthetic simulation models."
+            )
+        else:
+            tier_display = district_profile.provenance_tier.replace("_", " ").title()
+            disclaimer_text = (
+                f"Demographic baselines anchored in {tier_display} baseline "
+                f"({district_profile.source_reference}). "
+                "Behavioral attributes, network ties, and dialogue are synthetic simulation models."
+            )
+
         metadata = SimulationMetadata(
             scheme_name=RajarshiShahuPolicyEngine.SCHEME_NAME,
             scheme_code="RCSMS-EBC",
-            district=req.district,
+            district=target_district,
             cohort_size=req.cohort_size,
             simulation_steps=req.simulation_steps,
             seed=req.seed,
             llm_provider=provider_label,
             is_synthetic_poc=True,
             assumed_reimbursement_rate=final_cohort_res.assumed_reimbursement_rate,
-            data_disclaimer=(
-                "Ground-truth demographics derived from official 2010-11 Dhule Educational Census table. "
-                "Behavioral attributes, network ties, and dialogue are synthetic simulation models."
-            ),
+            data_disclaimer=disclaimer_text,
             policy_mode=policy_mode_val,
             policy_version=getattr(final_cohort_res, "policy_version", "2024.1-provisional"),
             is_provisional=is_prov,
