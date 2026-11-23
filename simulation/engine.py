@@ -1,9 +1,10 @@
-from dataclasses import dataclass, asdict, field
-from typing import Dict, List, Any, Optional
+from dataclasses import dataclass, asdict, field, fields
+from typing import Dict, List, Any, Optional, Tuple, Union
 import json
+import math
 
 from simulation.persona import StudentPersona, SimulationState
-from simulation.policy_rules import RajarshiShahuPolicyEngine, PolicyEvaluationResult
+from simulation.policy_rules import RajarshiShahuPolicyEngine, PolicyEvaluationResult, DTEPolicyConfig
 from simulation.agent import PersonaAgent, PersonaCalculatedMetrics, PersonaReasoningOutput, BaseLLMProvider
 
 @dataclass
@@ -43,8 +44,32 @@ class SimulationStepOutput:
     chosen_action: str
     confidence_level: str
 
+    # Granular DTE Policy Fee Relief & Metadata
+    tuition_fee_relief_inr: float = 0.0
+    exam_fee_relief_inr: float = 0.0
+    annual_tuition_fee: float = 0.0
+    annual_exam_fee: float = 0.0
+    net_payable_tuition_fee: float = 0.0
+    net_payable_exam_fee: float = 0.0
+    total_net_payable_fee: float = 0.0
+    policy_mode: str = "legacy_poc"
+    policy_version: str = "2024.1-provisional"
+    is_provisional: bool = True
+
+    def __post_init__(self):
+        if self.net_payable_tuition_fee == 0.0 and self.annual_tuition_fee > self.tuition_fee_relief_inr:
+            self.net_payable_tuition_fee = round(max(0.0, self.annual_tuition_fee - self.tuition_fee_relief_inr), 2)
+        if self.net_payable_exam_fee == 0.0 and self.annual_exam_fee > self.exam_fee_relief_inr:
+            self.net_payable_exam_fee = round(max(0.0, self.annual_exam_fee - self.exam_fee_relief_inr), 2)
+        if self.total_net_payable_fee == 0.0 and (self.annual_tuition_fee + self.annual_exam_fee) > self.estimated_fee_relief_inr:
+            self.total_net_payable_fee = round(max(0.0, (self.annual_tuition_fee + self.annual_exam_fee) - self.estimated_fee_relief_inr), 2)
+
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["net_payable_tuition_fee"] = self.net_payable_tuition_fee
+        d["net_payable_exam_fee"] = self.net_payable_exam_fee
+        d["total_net_payable_fee"] = self.total_net_payable_fee
+        return d
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, default=str)
@@ -55,7 +80,7 @@ class CohortSimulationResult:
     cohort_name: str
     total_personas: int
     seed: Optional[int]
-    assumed_reimbursement_rate: float
+    assumed_reimbursement_rate: Optional[float]
 
     # Statutory & Policy Totals
     eligible_count: int
@@ -88,11 +113,224 @@ class CohortSimulationResult:
     individual_results: List[SimulationStepOutput]
     assumptions_and_limitations: List[str] = field(default_factory=list)
 
+    # Granular DTE Fee Relief & Policy Metadata
+    total_tuition_fee_relief_inr: float = 0.0
+    total_exam_fee_relief_inr: float = 0.0
+    total_net_payable_tuition_fee_inr: float = 0.0
+    total_net_payable_exam_fee_inr: float = 0.0
+    total_net_payable_fee_inr: float = 0.0
+    policy_mode: str = "legacy_poc"
+    policy_version: str = "2024.1-provisional"
+    is_provisional: bool = True
+
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        d = asdict(self)
+        d["total_net_payable_tuition_fee_inr"] = self.total_net_payable_tuition_fee_inr
+        d["total_net_payable_exam_fee_inr"] = self.total_net_payable_exam_fee_inr
+        d["total_net_payable_fee_inr"] = self.total_net_payable_fee_inr
+        return d
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, default=str)
+
+
+def _build_counterfactual_config(cfg_input: Any) -> DTEPolicyConfig:
+    """Validates and converts a dictionary or DTEPolicyConfig into a verified DTEPolicyConfig instance."""
+    if cfg_input is None:
+        return RajarshiShahuPolicyEngine.DEFAULT_CONFIG
+    if isinstance(cfg_input, DTEPolicyConfig):
+        cfg = cfg_input
+    elif isinstance(cfg_input, dict):
+        valid_fields = {f.name for f in fields(DTEPolicyConfig)}
+        unknown = set(cfg_input.keys()) - valid_fields
+        if unknown:
+            raise ValueError(f"Invalid counterfactual parameter(s): {sorted(unknown)}")
+        base = asdict(RajarshiShahuPolicyEngine.DEFAULT_CONFIG)
+        base.update(cfg_input)
+        cfg = DTEPolicyConfig(**base)
+    else:
+        raise TypeError(f"counterfactual_config must be a dict or DTEPolicyConfig instance, got {type(cfg_input).__name__}")
+
+    # Validate numeric fields on cfg (applies identically to dict conversion and DTEPolicyConfig instances)
+    if isinstance(cfg.max_income_limit, bool):
+        raise ValueError("max_income_limit cannot be a boolean value.")
+    if not isinstance(cfg.max_income_limit, (int, float)):
+        raise ValueError("max_income_limit must be a numeric value.")
+    if math.isnan(cfg.max_income_limit) or math.isinf(cfg.max_income_limit):
+        raise ValueError(f"max_income_limit must be a finite number, got {cfg.max_income_limit}.")
+    if cfg.max_income_limit < 0:
+        raise ValueError(f"max_income_limit cannot be negative ({cfg.max_income_limit}).")
+
+    if isinstance(cfg.income_slab_lower, bool):
+        raise ValueError("income_slab_lower cannot be a boolean value.")
+    if not isinstance(cfg.income_slab_lower, (int, float)):
+        raise ValueError("income_slab_lower must be a numeric value.")
+    if math.isnan(cfg.income_slab_lower) or math.isinf(cfg.income_slab_lower):
+        raise ValueError(f"income_slab_lower must be a finite number, got {cfg.income_slab_lower}.")
+    if cfg.income_slab_lower < 0:
+        raise ValueError(f"income_slab_lower cannot be negative ({cfg.income_slab_lower}).")
+
+    if isinstance(cfg.min_attendance_percent, bool):
+        raise ValueError("min_attendance_percent cannot be a boolean value.")
+    if not isinstance(cfg.min_attendance_percent, (int, float)):
+        raise ValueError("min_attendance_percent must be a numeric value.")
+    if math.isnan(cfg.min_attendance_percent) or math.isinf(cfg.min_attendance_percent):
+        raise ValueError(f"min_attendance_percent must be a finite number, got {cfg.min_attendance_percent}.")
+    if not (0.0 <= cfg.min_attendance_percent <= 100.0):
+        raise ValueError(f"min_attendance_percent must be between 0.0 and 100.0, got {cfg.min_attendance_percent}.")
+
+    if isinstance(cfg.institutional_attendance_threshold, bool):
+        raise ValueError("institutional_attendance_threshold cannot be a boolean value.")
+    if not isinstance(cfg.institutional_attendance_threshold, (int, float)):
+        raise ValueError("institutional_attendance_threshold must be a numeric value.")
+    if math.isnan(cfg.institutional_attendance_threshold) or math.isinf(cfg.institutional_attendance_threshold):
+        raise ValueError(f"institutional_attendance_threshold must be a finite number, got {cfg.institutional_attendance_threshold}.")
+    if not (0.0 <= cfg.institutional_attendance_threshold <= 100.0):
+        raise ValueError(f"institutional_attendance_threshold must be between 0.0 and 100.0, got {cfg.institutional_attendance_threshold}.")
+
+    if isinstance(cfg.max_family_beneficiaries, bool):
+        raise ValueError("max_family_beneficiaries cannot be a boolean value.")
+    if not isinstance(cfg.max_family_beneficiaries, (int, float)):
+        raise ValueError("max_family_beneficiaries must be a numeric value.")
+    if math.isnan(cfg.max_family_beneficiaries) or math.isinf(cfg.max_family_beneficiaries):
+        raise ValueError(f"max_family_beneficiaries must be a finite number, got {cfg.max_family_beneficiaries}.")
+    if cfg.max_family_beneficiaries < 0:
+        raise ValueError(f"max_family_beneficiaries cannot be negative ({cfg.max_family_beneficiaries}).")
+
+    if isinstance(cfg.max_permissible_gap_years, bool):
+        raise ValueError("max_permissible_gap_years cannot be a boolean value.")
+    if not isinstance(cfg.max_permissible_gap_years, (int, float)):
+        raise ValueError("max_permissible_gap_years must be a numeric value.")
+    if math.isnan(cfg.max_permissible_gap_years) or math.isinf(cfg.max_permissible_gap_years):
+        raise ValueError(f"max_permissible_gap_years must be a finite number, got {cfg.max_permissible_gap_years}.")
+    if cfg.max_permissible_gap_years < 0:
+        raise ValueError(f"max_permissible_gap_years cannot be negative ({cfg.max_permissible_gap_years}).")
+
+    rate_fields = [
+        "female_tuition_rate", "female_exam_rate", "orphan_tuition_rate", "orphan_exam_rate",
+        "male_tier1_govt_tuition_rate", "male_tier1_pvt_tuition_rate", "male_tier2_tuition_rate", "male_exam_rate",
+        "default_poc_rate"
+    ]
+    for rate_field in rate_fields:
+        r = getattr(cfg, rate_field, None)
+        if r is not None:
+            if isinstance(r, bool):
+                raise ValueError(f"{rate_field} cannot be a boolean value.")
+            if not isinstance(r, (int, float)):
+                raise ValueError(f"{rate_field} must be a numeric value.")
+            if math.isnan(r) or math.isinf(r):
+                raise ValueError(f"{rate_field} must be a finite number, got {r}.")
+            if not (0.0 <= r <= 1.0):
+                raise ValueError(f"{rate_field} must be between 0.0 and 1.0, got {r}.")
+
+    bool_fields = ["use_strict_institutional_attendance", "enable_female_100_percent_rule", "enable_orphan_100_percent_rule"]
+    for b_field in bool_fields:
+        b_val = getattr(cfg, b_field, None)
+        if b_val is not None and not isinstance(b_val, bool):
+            raise ValueError(f"{b_field} must be a boolean, got {type(b_val).__name__}.")
+
+    return cfg
+
+
+def resolve_policy_parameters(
+    policy_mode: Optional[str] = "legacy_poc",
+    override_reimbursement_rate: Optional[float] = None,
+    assumed_reimbursement_rate: Optional[float] = None,
+    counterfactual_config: Optional[Any] = None,
+) -> Tuple[str, Optional[float], Optional[Any]]:
+    """
+    Resolves policy evaluation mode, effective reimbursement rate, and policy configuration.
+
+    Modes:
+      - 'legacy_poc': Applies legacy flat 50% reimbursement rate (default when omitted).
+      - 'statutory': Applies statutory DTE rules with deterministic criteria and fee itemization.
+      - 'override': Applies explicit uniform override rate (requires override_reimbursement_rate in [0.0, 1.0]).
+      - 'counterfactual': Applies counterfactual/what-if configuration parameters.
+
+    Aliases:
+      - 'poc_legacy' -> 'legacy_poc'
+      - 'statutory_dte' -> 'statutory'
+    """
+    if override_reimbursement_rate is not None:
+        if isinstance(override_reimbursement_rate, bool):
+            raise ValueError("override_reimbursement_rate cannot be a boolean value.")
+        if not isinstance(override_reimbursement_rate, (int, float)):
+            raise ValueError("override_reimbursement_rate must be a numeric value.")
+        if math.isnan(override_reimbursement_rate) or math.isinf(override_reimbursement_rate):
+            raise ValueError("override_reimbursement_rate must be a finite number.")
+
+    if assumed_reimbursement_rate is not None:
+        if isinstance(assumed_reimbursement_rate, bool):
+            raise ValueError("assumed_reimbursement_rate cannot be a boolean value.")
+        if not isinstance(assumed_reimbursement_rate, (int, float)):
+            raise ValueError("assumed_reimbursement_rate must be a numeric value.")
+        if math.isnan(assumed_reimbursement_rate) or math.isinf(assumed_reimbursement_rate):
+            raise ValueError("assumed_reimbursement_rate must be a finite number.")
+
+    raw_mode = (policy_mode or "").strip().lower() if policy_mode is not None else ""
+
+    # Alias resolution & normalization
+    if raw_mode in ("", "legacy_poc", "poc_legacy"):
+        mode = "legacy_poc"
+    elif raw_mode in ("statutory", "statutory_dte"):
+        mode = "statutory"
+    elif raw_mode == "override":
+        mode = "override"
+    elif raw_mode == "counterfactual":
+        mode = "counterfactual"
+    else:
+        raise ValueError(
+            f"Unknown policy_mode '{policy_mode}'. Supported modes: 'legacy_poc', 'statutory', 'override', 'counterfactual'."
+        )
+
+    # 1. Counterfactual mode validation
+    if mode == "counterfactual":
+        if override_reimbursement_rate is not None:
+            raise ValueError(
+                "override_reimbursement_rate cannot be specified in 'counterfactual' mode. "
+                "Counterfactual evaluations configure policy parameters, not uniform override rates."
+            )
+        if assumed_reimbursement_rate is not None:
+            raise ValueError(
+                "assumed_reimbursement_rate cannot be specified in 'counterfactual' mode. "
+                "Counterfactual evaluations configure policy parameters, not uniform override rates."
+            )
+        cfg = _build_counterfactual_config(counterfactual_config)
+        return "counterfactual", None, cfg
+
+    # 2. Statutory mode validation
+    if mode == "statutory":
+        if override_reimbursement_rate is not None:
+            raise ValueError("override_reimbursement_rate cannot be specified in 'statutory' mode. Use policy_mode='override'.")
+        if assumed_reimbursement_rate is not None:
+            raise ValueError("assumed_reimbursement_rate cannot be specified in 'statutory' mode. Use policy_mode='override'.")
+        return "statutory", None, RajarshiShahuPolicyEngine.DEFAULT_CONFIG
+
+    # 3. Explicit override mode
+    if mode == "override":
+        rate = override_reimbursement_rate if override_reimbursement_rate is not None else assumed_reimbursement_rate
+        if rate is None:
+            raise ValueError("override_reimbursement_rate must be provided when policy_mode is 'override'.")
+        if not (0.0 <= rate <= 1.0):
+            raise ValueError(f"override_reimbursement_rate must be between 0.0 and 1.0, got {rate}.")
+        return mode, float(rate), None
+
+    # 4. Legacy PoC mode (mode == "legacy_poc")
+    if override_reimbursement_rate is not None:
+        if not (0.0 <= override_reimbursement_rate <= 1.0):
+            raise ValueError(f"override_reimbursement_rate must be between 0.0 and 1.0, got {override_reimbursement_rate}.")
+        return "override", float(override_reimbursement_rate), None
+
+    if assumed_reimbursement_rate is not None:
+        if not (0.0 <= assumed_reimbursement_rate <= 1.0):
+            raise ValueError(f"assumed_reimbursement_rate must be between 0.0 and 1.0, got {assumed_reimbursement_rate}.")
+        return "override", float(assumed_reimbursement_rate), None
+
+    return "legacy_poc", RajarshiShahuPolicyEngine.DEFAULT_POC_ASSUMED_REIMBURSEMENT_RATE, None
+
+
+# Backward compatibility alias
+resolve_policy_mode_and_rate = resolve_policy_parameters
 
 
 class SimulationEngine:
@@ -107,16 +345,27 @@ class SimulationEngine:
         self,
         persona: StudentPersona,
         step_index: int = 1,
-        assumed_reimbursement_rate: Optional[float] = None
+        assumed_reimbursement_rate: Optional[float] = None,
+        policy_mode: Optional[str] = "legacy_poc",
+        override_reimbursement_rate: Optional[float] = None,
+        counterfactual_config: Optional[Any] = None,
     ) -> SimulationStepOutput:
         """
         Executes a complete single-persona simulation cycle for the Rajarshi Shahu scheme.
+        Supports explicit policy_mode ('legacy_poc', 'statutory', 'override', 'counterfactual').
         """
         agent = PersonaAgent(persona=persona, llm_provider=self.llm_provider)
 
+        resolved_mode, effective_rate, eval_config = resolve_policy_parameters(
+            policy_mode=policy_mode,
+            override_reimbursement_rate=override_reimbursement_rate,
+            assumed_reimbursement_rate=assumed_reimbursement_rate,
+            counterfactual_config=counterfactual_config,
+        )
+
         # 1. OBSERVE: Deterministic Policy Evaluation & Environment Perception
         policy_eval: PolicyEvaluationResult = RajarshiShahuPolicyEngine.evaluate_eligibility(
-            persona, assumed_reimbursement_rate=assumed_reimbursement_rate
+            persona, assumed_reimbursement_rate=effective_rate, config=eval_config
         )
         metrics: PersonaCalculatedMetrics = agent.compute_baseline_metrics(policy_eval)
 
@@ -177,6 +426,7 @@ class SimulationEngine:
                 "institution_type": persona.institution_type.value,
                 "admission_mode": persona.admission_mode.value,
                 "annual_tuition_fee": persona.annual_tuition_fee,
+                "annual_exam_fee": getattr(persona, "annual_exam_fee", 0.0),
                 "first_generation_learner": persona.first_generation_learner
             },
             scheme_name=policy_eval.scheme_name,
@@ -199,7 +449,17 @@ class SimulationEngine:
             stated_intention=reasoning.stated_intention,
             perceived_barriers=reasoning.perceived_barriers,
             chosen_action=reasoning.chosen_action,
-            confidence_level=reasoning.confidence_level
+            confidence_level=reasoning.confidence_level,
+            tuition_fee_relief_inr=policy_eval.tuition_fee_relief_inr,
+            exam_fee_relief_inr=policy_eval.exam_fee_relief_inr,
+            annual_tuition_fee=getattr(persona, "annual_tuition_fee", 0.0),
+            annual_exam_fee=getattr(persona, "annual_exam_fee", 0.0),
+            net_payable_tuition_fee=round(max(0.0, getattr(persona, "annual_tuition_fee", 0.0) - policy_eval.tuition_fee_relief_inr), 2),
+            net_payable_exam_fee=round(max(0.0, getattr(persona, "annual_exam_fee", 0.0) - policy_eval.exam_fee_relief_inr), 2),
+            total_net_payable_fee=round(max(0.0, (getattr(persona, "annual_tuition_fee", 0.0) + getattr(persona, "annual_exam_fee", 0.0)) - policy_eval.estimated_fee_relief_inr), 2),
+            policy_mode=resolved_mode,
+            policy_version=policy_eval.policy_version,
+            is_provisional=(resolved_mode in ("statutory", "counterfactual") and policy_eval.verification_status == "PROVISIONAL")
         )
 
     def run_cohort(
@@ -207,24 +467,32 @@ class SimulationEngine:
         personas: List[StudentPersona],
         cohort_name: str = "Dhule-10-Persona-Cohort",
         seed: Optional[int] = None,
-        assumed_reimbursement_rate: Optional[float] = None
+        assumed_reimbursement_rate: Optional[float] = None,
+        policy_mode: Optional[str] = "legacy_poc",
+        override_reimbursement_rate: Optional[float] = None,
+        counterfactual_config: Optional[Any] = None,
     ) -> CohortSimulationResult:
         """
         Executes individual simulations for each persona in a cohort and calculates
         comprehensive aggregate statistics, breakdowns, and barrier distributions.
+        Supports explicit policy_mode ('legacy_poc', 'statutory', 'override', 'counterfactual').
         """
-        individual_results: List[SimulationStepOutput] = []
-        effective_rate = (
-            assumed_reimbursement_rate
-            if assumed_reimbursement_rate is not None
-            else RajarshiShahuPolicyEngine.DEFAULT_POC_ASSUMED_REIMBURSEMENT_RATE
+        resolved_mode, effective_rate, eval_config = resolve_policy_parameters(
+            policy_mode=policy_mode,
+            override_reimbursement_rate=override_reimbursement_rate,
+            assumed_reimbursement_rate=assumed_reimbursement_rate,
+            counterfactual_config=counterfactual_config,
         )
 
+        individual_results: List[SimulationStepOutput] = []
         for p in personas:
             step_out = self.run_step(
                 persona=p,
                 step_index=1,
-                assumed_reimbursement_rate=effective_rate
+                assumed_reimbursement_rate=effective_rate,
+                policy_mode=resolved_mode,
+                override_reimbursement_rate=override_reimbursement_rate,
+                counterfactual_config=eval_config,
             )
             individual_results.append(step_out)
 
@@ -234,6 +502,11 @@ class SimulationEngine:
         eligibility_rate = round(eligible_count / total, 4) if total > 0 else 0.0
 
         total_relief = sum(r.estimated_fee_relief_inr for r in individual_results)
+        total_tuition_relief = sum(r.tuition_fee_relief_inr for r in individual_results)
+        total_exam_relief = sum(r.exam_fee_relief_inr for r in individual_results)
+        total_net_tuition = sum(r.net_payable_tuition_fee for r in individual_results)
+        total_net_exam = sum(r.net_payable_exam_fee for r in individual_results)
+        total_net_fee = sum(r.total_net_payable_fee for r in individual_results)
         avg_relief_eligible = round(total_relief / eligible_count, 2) if eligible_count > 0 else 0.0
 
         # Behavioral & Probabilistic Averages
@@ -294,9 +567,19 @@ class SimulationEngine:
         for r in individual_results:
             state_distribution[r.final_simulation_state] = state_distribution.get(r.final_simulation_state, 0) + 1
 
+        if resolved_mode == "statutory":
+            rate_desc = "Statutory DTE Rules (2024.1-provisional; female/orphan 100% waiver, tiered male rates)"
+        elif resolved_mode == "counterfactual":
+            cfg_ver = eval_config.policy_version if eval_config else "custom"
+            rate_desc = f"Counterfactual Policy Scenario ({cfg_ver})"
+        elif effective_rate is not None:
+            rate_desc = f"Assumed fee reimbursement rate: {effective_rate * 100:.0f}%. Note: actual departmental rules vary."
+        else:
+            rate_desc = "Statutory DTE Rules"
+
         assumptions = [
-            f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 75%).",
-            f"Assumed fee reimbursement rate: {effective_rate * 100:.0f}%. Note: actual departmental rules vary.",
+            f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 50% for continuing students, first-year exempt).",
+            rate_desc,
             f"Demographic fields grounded in Dhule 2010-11 education data; income/caste/behavioral parameters use baseline priors."
         ]
 
@@ -325,7 +608,15 @@ class SimulationEngine:
             ineligibility_reasons_summary=ineligibility_reasons,
             state_distribution=state_distribution,
             individual_results=individual_results,
-            assumptions_and_limitations=assumptions
+            assumptions_and_limitations=assumptions,
+            total_tuition_fee_relief_inr=round(total_tuition_relief, 2),
+            total_exam_fee_relief_inr=round(total_exam_relief, 2),
+            total_net_payable_tuition_fee_inr=round(total_net_tuition, 2),
+            total_net_payable_exam_fee_inr=round(total_net_exam, 2),
+            total_net_payable_fee_inr=round(total_net_fee, 2),
+            policy_mode=resolved_mode,
+            policy_version=eval_config.policy_version if eval_config else ("2024.1-provisional" if resolved_mode == "statutory" else ("legacy-poc" if resolved_mode == "legacy_poc" else "override")),
+            is_provisional=(resolved_mode in ("statutory", "counterfactual"))
         )
 
     def run_multistep_cohort(
@@ -341,19 +632,24 @@ class SimulationEngine:
         run_id: Optional[str] = None,
         policy_id: Optional[int] = None,
         policy_config_id: Optional[int] = None,
+        policy_mode: Optional[str] = "legacy_poc",
+        override_reimbursement_rate: Optional[float] = None,
+        counterfactual_config: Optional[Any] = None,
     ) -> "MultiStepSimulationResult":
         """
         Executes a multi-step simulation cycle over a persona cohort:
         For each step: Observe -> Reason -> Interact -> Act -> Administrative Lifecycle -> Update State.
         Supports optional relational database and lifecycle service persistence when session is provided.
+        Supports explicit policy_mode ('legacy_poc', 'statutory', 'override', 'counterfactual').
         """
         from simulation.social_network import SyntheticSocialNetwork
         from simulation.interaction import InteractionRecord, InteractionTopic
 
-        effective_rate = (
-            assumed_reimbursement_rate
-            if assumed_reimbursement_rate is not None
-            else RajarshiShahuPolicyEngine.DEFAULT_POC_ASSUMED_REIMBURSEMENT_RATE
+        resolved_mode, effective_rate, eval_config = resolve_policy_parameters(
+            policy_mode=policy_mode,
+            override_reimbursement_rate=override_reimbursement_rate,
+            assumed_reimbursement_rate=assumed_reimbursement_rate,
+            counterfactual_config=counterfactual_config,
         )
 
         # 1. Initialize Synthetic Social Network
@@ -385,7 +681,9 @@ class SimulationEngine:
 
             # A. OBSERVE: Evaluate deterministic statutory policy outcome
             policy_evals: Dict[str, PolicyEvaluationResult] = {
-                p.persona_id: RajarshiShahuPolicyEngine.evaluate_eligibility(p, assumed_reimbursement_rate=effective_rate)
+                p.persona_id: RajarshiShahuPolicyEngine.evaluate_eligibility(
+                    p, assumed_reimbursement_rate=effective_rate, config=eval_config
+                )
                 for p in personas
             }
 
@@ -646,6 +944,7 @@ class SimulationEngine:
                             "institution_type": p.institution_type.value,
                             "admission_mode": p.admission_mode.value,
                             "annual_tuition_fee": p.annual_tuition_fee,
+                            "annual_exam_fee": getattr(p, "annual_exam_fee", 0.0),
                             "first_generation_learner": p.first_generation_learner
                         },
                         scheme_name=policy_eval.scheme_name,
@@ -668,7 +967,17 @@ class SimulationEngine:
                         stated_intention=reasoning.stated_intention,
                         perceived_barriers=reasoning.perceived_barriers,
                         chosen_action=reasoning.chosen_action,
-                        confidence_level=reasoning.confidence_level
+                        confidence_level=reasoning.confidence_level,
+                        tuition_fee_relief_inr=policy_eval.tuition_fee_relief_inr,
+                        exam_fee_relief_inr=policy_eval.exam_fee_relief_inr,
+                        annual_tuition_fee=getattr(p, "annual_tuition_fee", 0.0),
+                        annual_exam_fee=getattr(p, "annual_exam_fee", 0.0),
+                        net_payable_tuition_fee=round(max(0.0, getattr(p, "annual_tuition_fee", 0.0) - policy_eval.tuition_fee_relief_inr), 2),
+                        net_payable_exam_fee=round(max(0.0, getattr(p, "annual_exam_fee", 0.0) - policy_eval.exam_fee_relief_inr), 2),
+                        total_net_payable_fee=round(max(0.0, (getattr(p, "annual_tuition_fee", 0.0) + getattr(p, "annual_exam_fee", 0.0)) - policy_eval.estimated_fee_relief_inr), 2),
+                        policy_mode=resolved_mode,
+                        policy_version=policy_eval.policy_version,
+                        is_provisional=(resolved_mode in ("statutory", "counterfactual") and policy_eval.verification_status == "PROVISIONAL")
                     )
                 )
 
@@ -677,7 +986,9 @@ class SimulationEngine:
                 step_individual_outputs,
                 cohort_name=f"{cohort_name}-Step{step_idx}",
                 seed=seed,
-                assumed_reimbursement_rate=effective_rate
+                assumed_reimbursement_rate=effective_rate,
+                policy_mode=resolved_mode,
+                policy_version=eval_config.policy_version if eval_config else ("2024.1-provisional" if resolved_mode == "statutory" else ("legacy-poc" if resolved_mode == "legacy_poc" else "override"))
             )
             step_cohort_results.append(step_cohort)
 
@@ -743,7 +1054,9 @@ class SimulationEngine:
         individual_results: List[SimulationStepOutput],
         cohort_name: str,
         seed: Optional[int],
-        assumed_reimbursement_rate: float
+        assumed_reimbursement_rate: Optional[float] = None,
+        policy_mode: str = "legacy_poc",
+        policy_version: str = "2024.1-provisional"
     ) -> CohortSimulationResult:
         """Helper to compute standard CohortSimulationResult from a list of SimulationStepOutputs."""
         total = len(individual_results)
@@ -752,6 +1065,11 @@ class SimulationEngine:
         eligibility_rate = round(eligible_count / total, 4) if total > 0 else 0.0
 
         total_relief = sum(r.estimated_fee_relief_inr for r in individual_results)
+        total_tuition_relief = sum(r.tuition_fee_relief_inr for r in individual_results)
+        total_exam_relief = sum(r.exam_fee_relief_inr for r in individual_results)
+        total_net_tuition = sum(r.net_payable_tuition_fee for r in individual_results)
+        total_net_exam = sum(r.net_payable_exam_fee for r in individual_results)
+        total_net_fee = sum(r.total_net_payable_fee for r in individual_results)
         avg_relief_eligible = round(total_relief / eligible_count, 2) if eligible_count > 0 else 0.0
 
         avg_awareness = round(sum(r.awareness_score for r in individual_results) / total, 4) if total > 0 else 0.0
@@ -802,9 +1120,18 @@ class SimulationEngine:
         for r in individual_results:
             state_distribution[r.final_simulation_state] = state_distribution.get(r.final_simulation_state, 0) + 1
 
+        if policy_mode == "statutory":
+            rate_desc = "Statutory DTE Rules (2024.1-provisional; female/orphan 100% waiver, tiered male rates)"
+        elif policy_mode == "counterfactual":
+            rate_desc = f"Counterfactual Policy Scenario ({policy_version})"
+        elif policy_mode == "override":
+            rate_desc = f"Explicit override reimbursement rate: {assumed_reimbursement_rate * 100:.0f}%."
+        else:
+            rate_desc = f"Legacy PoC Baseline (assumed uniform rate: {assumed_reimbursement_rate * 100:.0f}%)."
+
         assumptions = [
-            f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 75%).",
-            f"Assumed fee reimbursement rate: {assumed_reimbursement_rate * 100:.0f}%.",
+            f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 50% for continuing students, first-year exempt).",
+            rate_desc,
             f"Demographic fields grounded in Dhule 2010-11 education data; behavioral traits dynamically updated via peer diffusion."
         ]
 
@@ -833,7 +1160,15 @@ class SimulationEngine:
             ineligibility_reasons_summary=ineligibility_reasons,
             state_distribution=state_distribution,
             individual_results=individual_results,
-            assumptions_and_limitations=assumptions
+            assumptions_and_limitations=assumptions,
+            total_tuition_fee_relief_inr=round(total_tuition_relief, 2),
+            total_exam_fee_relief_inr=round(total_exam_relief, 2),
+            total_net_payable_tuition_fee_inr=round(total_net_tuition, 2),
+            total_net_payable_exam_fee_inr=round(total_net_exam, 2),
+            total_net_payable_fee_inr=round(total_net_fee, 2),
+            policy_mode=policy_mode,
+            policy_version=policy_version,
+            is_provisional=(policy_mode in ("statutory", "counterfactual"))
         )
 
 
@@ -844,7 +1179,7 @@ class MultiStepSimulationResult:
     total_personas: int
     total_steps: int
     seed: Optional[int]
-    assumed_reimbursement_rate: float
+    assumed_reimbursement_rate: Optional[float]
     network_summary: Dict[str, Any]
     interactions_by_step: Dict[int, List[Dict[str, Any]]]
     step_cohort_results: List[CohortSimulationResult]

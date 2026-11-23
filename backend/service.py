@@ -102,7 +102,39 @@ class SimulationService:
                 llm_provider=provider_label,
             )
 
-        # 4. Execute multi-step engine run
+        # 4. Resolve Counterfactual Policy Parameters if applicable
+        counterfactual_config = None
+        raw_mode = (getattr(req, "policy_mode", None) or "").strip().lower()
+        cp = getattr(req, "counterfactual_params", None)
+        cc = getattr(req, "counterfactual_config", None)
+        if cp is not None and cc is not None:
+            raise ValueError(
+                "Cannot supply both 'counterfactual_params' and 'counterfactual_config'. "
+                "Please provide only one."
+            )
+        if raw_mode in ("counterfactual",) or cp is not None or cc is not None:
+            from simulation.policy_rules import DTEPolicyConfig
+            if cp is not None:
+                counterfactual_config = DTEPolicyConfig(
+                    policy_version=f"counterfactual-{cp.policy_label or 'scenario'}",
+                    max_income_limit=cp.max_income_limit if cp.max_income_limit is not None else 800000.0,
+                    income_slab_lower=cp.income_slab_lower if cp.income_slab_lower is not None else 250000.0,
+                    min_attendance_percent=cp.min_attendance_percent if cp.min_attendance_percent is not None else 50.0,
+                    institutional_attendance_threshold=cp.institutional_attendance_threshold if cp.institutional_attendance_threshold is not None else 75.0,
+                    enable_female_100_percent_rule=cp.enable_female_100_percent_rule if cp.enable_female_100_percent_rule is not None else True,
+                    female_tuition_rate=cp.female_tuition_rate if cp.female_tuition_rate is not None else 1.00,
+                    female_exam_rate=cp.female_exam_rate if cp.female_exam_rate is not None else 1.00,
+                    male_tier1_govt_tuition_rate=cp.male_tier1_govt_tuition_rate if cp.male_tier1_govt_tuition_rate is not None else 1.00,
+                    male_tier1_pvt_tuition_rate=cp.male_tier1_pvt_tuition_rate if cp.male_tier1_pvt_tuition_rate is not None else 0.50,
+                    male_tier2_tuition_rate=cp.male_tier2_tuition_rate if cp.male_tier2_tuition_rate is not None else 0.50,
+                    male_exam_rate=cp.male_exam_rate if cp.male_exam_rate is not None else 0.50,
+                )
+            elif cc is not None:
+                counterfactual_config = cc
+            else:
+                counterfactual_config = DTEPolicyConfig(policy_version="counterfactual-scenario")
+
+        # 5. Execute multi-step engine run
         try:
             engine = SimulationEngine(llm_provider=provider)
             raw_result: MultiStepSimulationResult = engine.run_multistep_cohort(
@@ -116,6 +148,10 @@ class SimulationService:
                 run_id=run_id,
                 policy_id=policy_id,
                 policy_config_id=policy_config_id,
+                policy_mode=getattr(req, "policy_mode", "legacy_poc"),
+                override_reimbursement_rate=getattr(req, "override_reimbursement_rate", None),
+                assumed_reimbursement_rate=getattr(req, "assumed_reimbursement_rate", None),
+                counterfactual_config=counterfactual_config,
             )
 
             # 5. Finalize Simulation Run in Persistence Adapter
@@ -137,6 +173,19 @@ class SimulationService:
             raise
 
         # 6. Map Metadata & Provenance
+        final_cohort_res = raw_result.step_cohort_results[-1]
+        policy_mode_val = getattr(final_cohort_res, "policy_mode", "legacy_poc")
+        is_prov = (policy_mode_val in ("statutory", "counterfactual"))
+
+        if is_prov:
+            provisional_notes = [
+                "PROVISIONAL ASSUMPTION: 50% examination fee relief for male candidates is provisional/unverified pending local primary GR confirmation.",
+                "PROVISIONAL ASSUMPTION: Female 100% tuition and exam fee waiver is modeled under provisional GR No. शिष्यवृ-२०२४/प्र.क्र.१०५/तांशि-४ (08 July 2024; unverified raw GR text).",
+                "PROVISIONAL ASSUMPTION: Male income slab cutoff of INR 2.50 Lakh and 8.00 Lakh ceiling modeled under provisional GR TEM-2018/C.R.35/TE-4.",
+            ]
+        else:
+            provisional_notes = []
+
         metadata = SimulationMetadata(
             scheme_name=RajarshiShahuPolicyEngine.SCHEME_NAME,
             scheme_code="RCSMS-EBC",
@@ -146,11 +195,15 @@ class SimulationService:
             seed=req.seed,
             llm_provider=provider_label,
             is_synthetic_poc=True,
-            assumed_reimbursement_rate=0.50,
+            assumed_reimbursement_rate=final_cohort_res.assumed_reimbursement_rate,
             data_disclaimer=(
                 "Ground-truth demographics derived from official 2010-11 Dhule Educational Census table. "
                 "Behavioral attributes, network ties, and dialogue are synthetic simulation models."
-            )
+            ),
+            policy_mode=policy_mode_val,
+            policy_version=getattr(final_cohort_res, "policy_version", "2024.1-provisional"),
+            is_provisional=is_prov,
+            provisional_notes=provisional_notes
         )
 
         provenance = ProvenanceBreakdown(
@@ -164,13 +217,12 @@ class SimulationService:
                 "initial_awareness", "digital_literacy", "document_readiness", "institutional_trust", "personality_traits"
             ],
             poc_assumptions=[
-                "50% tuition fee reimbursement baseline estimate",
+                "50% tuition fee reimbursement baseline estimate" if policy_mode_val == "legacy_poc" else f"Policy evaluation mode: {policy_mode_val}",
                 "Synthetic social graph degree bound k <= 2"
             ]
         )
 
         # 5. Map Final Step Aggregate Metrics
-        final_cohort_res = raw_result.step_cohort_results[-1]
         agg_metrics = AggregateMetrics(
             total_personas=final_cohort_res.total_personas,
             eligible_count=final_cohort_res.eligible_count,
@@ -183,7 +235,16 @@ class SimulationService:
             realized_uptake_count=final_cohort_res.benefit_received_count,
             realized_uptake_rate=round(final_cohort_res.uptake_rate, 4),
             total_estimated_fee_relief_inr=final_cohort_res.total_estimated_fee_relief_inr,
-            average_fee_relief_per_eligible_inr=final_cohort_res.average_fee_relief_per_eligible_inr
+            average_fee_relief_per_eligible_inr=final_cohort_res.average_fee_relief_per_eligible_inr,
+            total_tuition_fee_relief_inr=getattr(final_cohort_res, "total_tuition_fee_relief_inr", 0.0),
+            total_exam_fee_relief_inr=getattr(final_cohort_res, "total_exam_fee_relief_inr", 0.0),
+            total_net_payable_tuition_fee_inr=getattr(final_cohort_res, "total_net_payable_tuition_fee_inr", 0.0),
+            total_net_payable_exam_fee_inr=getattr(final_cohort_res, "total_net_payable_exam_fee_inr", 0.0),
+            total_net_payable_fee_inr=getattr(final_cohort_res, "total_net_payable_fee_inr", 0.0),
+            policy_mode=policy_mode_val,
+            policy_version=getattr(final_cohort_res, "policy_version", "2024.1-provisional"),
+            is_provisional=is_prov,
+            provisional_notes=provisional_notes
         )
 
         # 6. Map Step Metrics
@@ -233,12 +294,21 @@ class SimulationService:
                     caste_category=p.caste_category,
                     family_income=p.family_income,
                     annual_tuition_fee=p.annual_tuition_fee,
+                    annual_exam_fee=getattr(p, "annual_exam_fee", 0.0),
                     attendance_percentage=p.attendance_percentage,
                     previous_year_passed=p.previous_year_passed,
                     first_generation_learner=p.first_generation_learner,
                     is_statutorily_eligible=step_out.is_eligible,
                     estimated_fee_relief_inr=step_out.estimated_fee_relief_inr,
                     statutory_failure_reasons=step_out.statutory_failure_reasons,
+                    tuition_fee_relief_inr=getattr(step_out, "tuition_fee_relief_inr", 0.0),
+                    exam_fee_relief_inr=getattr(step_out, "exam_fee_relief_inr", 0.0),
+                    net_payable_tuition_fee=getattr(step_out, "net_payable_tuition_fee", 0.0),
+                    net_payable_exam_fee=getattr(step_out, "net_payable_exam_fee", 0.0),
+                    total_net_payable_fee=getattr(step_out, "total_net_payable_fee", 0.0),
+                    policy_version=getattr(step_out, "policy_version", "2024.1-provisional"),
+                    is_provisional=getattr(step_out, "is_provisional", is_prov),
+                    provisional_notes=provisional_notes,
                     initial_awareness=ev.get("initial_awareness", p.initial_awareness),
                     final_awareness=ev.get("final_awareness", p.initial_awareness),
                     awareness_gain=ev.get("awareness_gain", 0.0),
