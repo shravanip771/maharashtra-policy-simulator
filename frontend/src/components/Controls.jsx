@@ -3,6 +3,7 @@ import React from 'react';
 export default function Controls({
   district,
   setDistrict,
+  districts = [],
   cohortSize,
   setCohortSize,
   numSteps,
@@ -29,7 +30,15 @@ export default function Controls({
             onChange={(e) => setDistrict(e.target.value)}
             disabled={loading}
           >
-            <option value="Dhule">Dhule</option>
+            {districts && districts.length > 0 ? (
+              districts.map((d) => (
+                <option key={d.district_id || d.district_name} value={d.district_name}>
+                  {d.district_name}
+                </option>
+              ))
+            ) : (
+              <option value={district}>{district}</option>
+            )}
           </select>
         </div>
 

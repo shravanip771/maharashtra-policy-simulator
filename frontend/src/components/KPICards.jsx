@@ -1,6 +1,6 @@
 import React from 'react';
 
-export default function KPICards({ aggregates }) {
+export default function KPICards({ aggregates, scope, scopeLabel, scope_label }) {
   if (!aggregates) return null;
 
   const totalPersonas = aggregates.total_personas ?? aggregates.cohort_size ?? 0;
@@ -8,12 +8,39 @@ export default function KPICards({ aggregates }) {
   const meanAwareness = aggregates.mean_awareness ?? 0;
   const expectedUptake = aggregates.expected_uptake_probability ?? aggregates.expected_uptake ?? 0;
   const realizedUptake = aggregates.realized_uptake_count ?? aggregates.realized_uptake ?? 0;
+  const totalFeeRelief = aggregates.total_estimated_fee_relief_inr ?? aggregates.total_fee_relief_inr ?? null;
+  const avgFeeRelief = aggregates.average_fee_relief_per_eligible_inr ?? aggregates.average_fee_relief_inr ?? null;
+
+  const resolvedScopeLabel = scopeLabel || scope_label || (
+    scope === 'statewide'
+      ? 'Maharashtra Statewide (36 Districts)'
+      : scope === 'drilldown'
+        ? (aggregates.district_name ? `District Drill-Down (${aggregates.district_name})` : 'District Drill-Down')
+        : (aggregates.district_name
+            ? `District Drill-Down (${aggregates.district_name})`
+            : (totalPersonas > 36 ? 'Maharashtra Statewide (36 Districts)' : null))
+  );
+
+  const formatINR = (val) => {
+    const num = Number(val);
+    if (isNaN(num)) return '₹0';
+    return '₹' + num.toLocaleString('en-IN', { maximumFractionDigits: 0 });
+  };
 
   return (
     <section className="section">
-      <h2 className="section-title">Simulation Results</h2>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '8px' }}>
+        <h2 className="section-title" style={{ margin: 0 }}>Simulation Results</h2>
+        {resolvedScopeLabel && (
+          <span className="ps-chip ps-chip-support" style={{ fontSize: '12px' }}>
+            {resolvedScopeLabel}
+          </span>
+        )}
+      </div>
       <p className="section-subtitle">
-        Aggregated outcomes across the simulated cohort.
+        {resolvedScopeLabel
+          ? `Aggregated outcomes across the ${resolvedScopeLabel} cohort.`
+          : 'Aggregated outcomes across the simulated cohort.'}
       </p>
 
       <div className="kpi-grid">
@@ -45,7 +72,7 @@ export default function KPICards({ aggregates }) {
           <div className="kpi-label">Expected Uptake</div>
           <div className="kpi-value">{(Number(expectedUptake) * 100).toFixed(0)}%</div>
           <div className="kpi-desc">
-            Model-estimated probability of uptake (not a real-world prediction).
+            Model-estimated probability of uptake.
           </div>
         </div>
 
@@ -56,11 +83,21 @@ export default function KPICards({ aggregates }) {
             Synthetic personas that reached the benefit-received state in this run.
           </div>
         </div>
-      </div>
 
-      <p className="disclaimer-note">
-        Results are based on synthetic personas and are not real-world population statistics.
-      </p>
+        {totalFeeRelief != null && (
+          <div className="kpi-card">
+            <div className="kpi-label">Estimated Fee Relief</div>
+            <div className="kpi-value" style={{ color: 'var(--accent-terracotta)' }}>
+              {formatINR(totalFeeRelief)}
+            </div>
+            <div className="kpi-desc">
+              {avgFeeRelief != null && avgFeeRelief > 0
+                ? `Total 50% statutory fee waiver (${formatINR(avgFeeRelief)} avg/eligible student).`
+                : 'Total estimated 50% statutory fee waiver for eligible students.'}
+            </div>
+          </div>
+        )}
+      </div>
     </section>
   );
 }
