@@ -46,7 +46,10 @@ class CounterfactualPolicyParams(BaseModel):
 class SimulationRequest(BaseModel):
     """Configuration payload to trigger a multi-step cohort simulation."""
     district: str = Field(default="Dhule", description="Target district for demographic baseline")
-    cohort_size: int = Field(default=10, ge=1, le=50, description="Number of synthetic personas to simulate")
+    cohort_size: Optional[int] = Field(
+        default=None,
+        description="Optional cohort size; automatically determined from configured district allocation if omitted"
+    )
     simulation_steps: int = Field(default=2, ge=1, le=5, description="Number of sequential simulation rounds")
     seed: int = Field(default=42, description="Random seed for deterministic reproducibility")
     use_gemini: bool = Field(default=False, description="Whether to invoke live Gemini API (defaults to offline stub)")
@@ -59,19 +62,12 @@ class SimulationRequest(BaseModel):
 
     @field_validator("district")
     @classmethod
-    def validate_supported_district(cls, v: Any) -> str:
+    def validate_district_format(cls, v: Any) -> str:
         if v is None:
             return "Dhule"
         if not isinstance(v, str) or not v.strip():
             raise ValueError("District name must be a non-empty string.")
-        from simulation.district_config import list_supported_districts
-        supported = list_supported_districts()
-        matched = next((d for d in supported if d.lower() == v.strip().lower()), None)
-        if not matched:
-            raise ValueError(
-                f"District '{v}' is not supported. Supported districts: {', '.join(supported)}"
-            )
-        return matched
+        return v.strip()
 
     @field_validator("override_reimbursement_rate", "assumed_reimbursement_rate", mode="before")
     @classmethod
@@ -86,11 +82,29 @@ class SimulationRequest(BaseModel):
         return v
 
     @model_validator(mode="after")
+    def validate_policy_mode_inputs(self) -> "SimulationRequest":
+        pm = (self.policy_mode or "legacy_poc").strip().lower()
+        if pm in ("override",):
+            eff_rate = self.override_reimbursement_rate if self.override_reimbursement_rate is not None else self.assumed_reimbursement_rate
+            if eff_rate is None:
+                raise ValueError("override_reimbursement_rate must be provided when policy_mode is 'override'")
+        elif pm in ("statutory", "statutory_dte"):
+            if self.override_reimbursement_rate is not None or self.assumed_reimbursement_rate is not None:
+                raise ValueError("override_reimbursement_rate cannot be specified in 'statutory' mode")
+        elif pm in ("counterfactual",):
+            if self.override_reimbursement_rate is not None or self.assumed_reimbursement_rate is not None:
+                raise ValueError("override_reimbursement_rate cannot be specified in 'counterfactual' mode")
+        return self
+
+    @model_validator(mode="after")
     def validate_counterfactual_inputs(self) -> "SimulationRequest":
         if self.counterfactual_params is not None and self.counterfactual_config is not None:
             raise ValueError(
                 "Cannot supply both 'counterfactual_params' and 'counterfactual_config'. Please provide only one."
             )
+        if self.counterfactual_config is not None:
+            from simulation.engine import _build_counterfactual_config
+            _build_counterfactual_config(self.counterfactual_config)
         return self
 
     @model_validator(mode="after")
@@ -176,6 +190,20 @@ class NetworkTopology(BaseModel):
     adjacency_list: Dict[str, List[str]]
 
 
+class InteractionRecordDTO(BaseModel):
+    """Structured dialogue and state transition record for peer interactions."""
+    simulation_step: int
+    sender_id: str
+    sender_name: str
+    receiver_id: str
+    receiver_name: str
+    interaction_topic: str
+    sender_message: str
+    receiver_response: str
+    state_changed: bool
+    state_changes: Dict[str, Any]
+
+
 class PersonaOutput(BaseModel):
     """Complete profile, decision trace, and state for one simulated citizen."""
     persona_id: str
@@ -225,20 +253,15 @@ class PersonaOutput(BaseModel):
     stated_intention: str
     major_barriers: List[str]
     inner_monologue: str
+    interaction_history: List[InteractionRecordDTO] = Field(
+        default_factory=list,
+        description="Chronological peer interaction records involving this persona"
+    )
 
 
-class InteractionRecordDTO(BaseModel):
-    """Structured dialogue and state transition record for peer interactions."""
-    simulation_step: int
-    sender_id: str
-    sender_name: str
-    receiver_id: str
-    receiver_name: str
-    interaction_topic: str
-    sender_message: str
-    receiver_response: str
-    state_changed: bool
-    state_changes: Dict[str, Any]
+class FeaturedPersonaDTO(PersonaOutput):
+    """Profile, decision trace, and peer conversation history for a featured persona."""
+    pass
 
 
 class SimulationResponse(BaseModel):
@@ -248,5 +271,100 @@ class SimulationResponse(BaseModel):
     aggregate_metrics: AggregateMetrics
     step_metrics: List[StepMetric]
     network_topology: NetworkTopology
-    personas: List[PersonaOutput]
-    interactions: List[InteractionRecordDTO]
+    personas: List[FeaturedPersonaDTO] = Field(
+        ...,
+        description="10 featured personas sampled deterministically for UI display"
+    )
+    interactions: List[InteractionRecordDTO] = Field(
+        default_factory=list,
+        description="Interaction records involving the featured personas"
+    )
+    featured_personas: Optional[List[FeaturedPersonaDTO]] = Field(
+        default=None,
+        description="Featured personas with interaction histories (alias for personas)"
+    )
+
+
+class StatewideCohortResponse(BaseModel):
+    """Payload for the statewide 1,000-student cohort across Maharashtra districts."""
+    total_count: int = Field(..., description="Total number of personas generated across the state")
+    district_allocations: Dict[str, int] = Field(..., description="Configured quota allocation per district")
+    missing_district: Optional[str] = Field(default=None, description="Any omitted district if applicable")
+    seed: int = Field(default=42, description="Random seed used for deterministic generation")
+    personas: List[PersonaOutput] = Field(..., description="List of generated personas with baseline policy evaluation")
+
+
+class StatewideSimulationRequest(BaseModel):
+    """Configuration payload to trigger a statewide 1,000-persona multi-step simulation."""
+    simulation_steps: int = Field(default=2, ge=1, le=5, description="Number of sequential simulation rounds")
+    seed: int = Field(default=42, description="Random seed for deterministic statewide generation and sampling")
+    use_gemini: bool = Field(default=False, description="Whether to invoke live Gemini API (defaults to offline stub)")
+    gemini_model: str = Field(default="gemini-3.1-flash-lite", description="Gemini model identifier when use_gemini is True")
+
+
+class DistrictSimulationResultDTO(BaseModel):
+    """Aggregated policy metrics for an individual district within the statewide cohort."""
+    district_name: str
+    allocated_personas: int
+    eligible_count: int
+    ineligible_count: int
+    eligibility_rate: float
+    attempted_applications: int
+    completed_applications: int
+    realized_beneficiaries: int
+    uptake_rate: float
+    total_estimated_fee_relief_inr: float
+    average_relief_per_eligible_inr: float
+    mean_awareness: float
+    mean_application_probability: float
+
+
+class StatewideSimulationSummaryDTO(BaseModel):
+    """Statewide macro KPIs aggregated across all 1,000 simulated student personas."""
+    total_personas: int
+    eligible_count: int
+    ineligible_count: int
+    eligibility_rate: float
+    mean_initial_awareness: float
+    mean_final_awareness: float
+    mean_awareness_gain: float
+    mean_perceived_benefit: float
+    mean_application_probability: float
+    expected_uptake_probability: float
+    attempted_applications_count: int
+    completed_applications_count: int
+    realized_beneficiaries_count: int
+    realized_uptake_rate: float
+    total_estimated_fee_relief_inr: float
+    average_fee_relief_per_eligible_inr: float
+    ineligibility_reasons_summary: Dict[str, int]
+    simulation_state_distribution: Dict[str, int]
+    top_application_barriers: Dict[str, int]
+    step_metrics: List[StepMetric]
+
+
+class StatewideSimulationMetadataDTO(BaseModel):
+    """System provenance and operational metadata for the statewide run."""
+    run_id: str
+    seed: int
+    simulation_steps: int
+    scheme_name: str
+    scheme_code: str
+    total_districts_configured: int
+    total_personas_processed: int
+    llm_provider: str
+    completion_status: str
+    assumed_reimbursement_rate: float
+    data_disclaimer: str
+
+
+class StatewideSimulationResponse(BaseModel):
+    """Complete response payload for the statewide 1,000-persona simulation."""
+    simulation_summary: StatewideSimulationSummaryDTO
+    district_results: List[DistrictSimulationResultDTO]
+    featured_personas: List[FeaturedPersonaDTO]
+    simulation_metadata: StatewideSimulationMetadataDTO
+    interactions: List[InteractionRecordDTO] = Field(
+        default_factory=list,
+        description="Interaction records involving the featured personas"
+    )

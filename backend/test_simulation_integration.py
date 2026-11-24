@@ -665,11 +665,10 @@ class TestSimulationIntegration:
             pass
 
     def test_service_layer_execution_with_persistence(self, isolated_db_session: Session):
-        """Verifies SimulationService executes and persists via the service interface."""
+        """Verifies SimulationService executes and persists via the service interface with automatic allocation."""
         session = isolated_db_session
         req = SimulationRequest(
             district="Dhule",
-            cohort_size=5,
             simulation_steps=2,
             seed=42,
             use_gemini=False,
@@ -682,20 +681,20 @@ class TestSimulationIntegration:
         )
 
         assert response.metadata.district == "Dhule"
-        assert response.metadata.cohort_size == 5
-        assert response.aggregate_metrics.total_personas == 5
-        assert len(response.personas) == 5
+        assert response.metadata.cohort_size == 18
+        assert response.aggregate_metrics.total_personas == 18
+        assert len(response.personas) == 10  # 10 featured personas sampled
         assert len(response.step_metrics) == 2
 
-        # Verify database records were created in the session
+        # Verify database records were created in the session for full cohort of 18
         run_count = session.execute(text("SELECT count(*) FROM simulation_runs")).scalar()
         assert run_count == 1
 
         persona_count = session.execute(text("SELECT count(*) FROM synthetic_personas")).scalar()
-        assert persona_count == 5
+        assert persona_count == 18
 
         outcome_count = session.execute(text("SELECT count(*) FROM individual_outcomes")).scalar()
-        assert outcome_count == 5
+        assert outcome_count == 18
 
     def test_transaction_ownership_no_internal_commits(self, isolated_db_session: Session):
         """

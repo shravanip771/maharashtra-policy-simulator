@@ -5,20 +5,39 @@ Exposes REST endpoints to trigger multi-step simulations and query system health
 
 import os
 from typing import Dict, Any, List
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import SimulationRequest, SimulationResponse
+from backend.models import (
+    SimulationRequest,
+    SimulationResponse,
+    StatewideCohortResponse,
+    StatewideSimulationRequest,
+    StatewideSimulationResponse
+)
 from backend.service import SimulationService
 from backend.auth.router import auth_router
 from simulation.policy_rules import RajarshiShahuPolicyEngine
-from simulation.district_config import list_supported_districts, get_district_profile
+from simulation.district_config import list_supported_districts
 
 app = FastAPI(
     title="Maharashtra Policy Simulator API",
     description="Agent-based policy uptake and social interaction simulation engine for Maharashtra education schemes.",
     version="1.0.0"
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    msg = "; ".join(str(err.get("msg", "")) for err in errors)
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": msg, "errors": jsonable_encoder(errors)}
+    )
 
 # Mount authentication router under /api/auth
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
@@ -35,7 +54,7 @@ app.add_middleware(
 
 @app.get("/api/health", status_code=status.HTTP_200_OK)
 def health_check() -> Dict[str, Any]:
-    """Health check endpoint confirming API status, active policy reference, and all supported districts."""
+    """Health check endpoint confirming API status and all supported districts."""
     supported = list_supported_districts()
     return {
         "status": "ok",
@@ -66,37 +85,44 @@ def list_schemes() -> List[Dict[str, Any]]:
 
 @app.get("/api/districts", status_code=status.HTTP_200_OK)
 def list_districts() -> List[Dict[str, Any]]:
-    """
-    Lists all 36 Maharashtra districts configured in the policy simulator.
-    Dhule (primary empirical baseline) is ordered first, followed by all remaining districts.
-    """
-    all_names = list_supported_districts()
-    ordered_names = ["Dhule"] + [d for d in all_names if d != "Dhule"]
+    """Lists districts with verified census / empirical baseline configurations."""
+    from simulation.district_config import DISTRICT_REGISTRY
+    districts: List[Dict[str, Any]] = []
 
-    results: List[Dict[str, Any]] = []
-    for d_name in ordered_names:
-        prof = get_district_profile(d_name)
-        status_label = (
-            "Verified Empirical Baseline"
-            if prof.provenance_tier == "empirical_observed"
-            else "Provisional Baseline"
-        )
-        results.append({
-            "district_name": prof.district_name,
-            "district_id": prof.district_id,
-            "division": prof.division,
-            "region_type": prof.region_type,
-            "provenance_tier": prof.provenance_tier,
-            "status": status_label,
-            "reference_dataset": prof.source_reference,
-            "reference_year": prof.reference_year,
-            "source_url": prof.source_url,
-            "talukas": prof.talukas,
-            "missing_data": prof.missing_data,
-            "available_statistics": prof.available_statistics,
-            "assumptions_and_fallbacks": prof.assumptions_and_fallbacks,
+    # Ensure Dhule is first for backward compatibility with existing tests
+    dhule_p = DISTRICT_REGISTRY.get("DHULE")
+    if dhule_p:
+        districts.append({
+            "district_name": dhule_p.district_name,
+            "district_code": "498",
+            "division": dhule_p.division,
+            "region_type": dhule_p.region_type,
+            "provenance_tier": dhule_p.provenance_tier,
+            "reference_dataset": dhule_p.source_reference,
+            "reference_year": dhule_p.reference_year,
+            "talukas": dhule_p.talukas,
+            "available_statistics": dhule_p.available_statistics,
+            "status": "Verified Empirical Baseline" if dhule_p.provenance_tier == "empirical_observed" else "Provisional Baseline"
         })
-    return results
+
+    # Add all other configured districts from registry
+    for key, p in DISTRICT_REGISTRY.items():
+        if key == "DHULE":
+            continue
+        districts.append({
+            "district_name": p.district_name,
+            "district_code": p.district_id,
+            "division": p.division,
+            "region_type": p.region_type,
+            "provenance_tier": p.provenance_tier,
+            "reference_dataset": p.source_reference,
+            "reference_year": p.reference_year,
+            "talukas": p.talukas,
+            "available_statistics": p.available_statistics,
+            "status": "Verified Empirical Baseline" if p.provenance_tier == "empirical_observed" else "Provisional Baseline"
+        })
+
+    return districts
 
 
 @app.post("/api/simulate", response_model=SimulationResponse, status_code=status.HTTP_200_OK)
@@ -107,15 +133,53 @@ def run_simulation(request: SimulationRequest) -> SimulationResponse:
     """
     try:
         return SimulationService.execute_simulation(request)
-    except (ValueError, TypeError) as ve:
+    except ValueError as ve:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(ve)
         )
     except Exception as e:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Simulation execution failed: {str(e)}"
+        )
+
+
+@app.get("/api/cohorts/statewide", response_model=StatewideCohortResponse, status_code=status.HTTP_200_OK)
+def get_statewide_cohort(
+    seed: int = Query(default=42, description="Deterministic random seed for persona generation")
+) -> StatewideCohortResponse:
+    """
+    Returns the complete statewide synthetic cohort of 1,000 personas distributed
+    across the 36 configured districts according to Census 2011 population weighting.
+    """
+    try:
+        return SimulationService.generate_statewide_cohort(seed=seed)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Statewide cohort generation failed: {str(e)}"
+        )
+
+
+@app.post("/api/simulate/statewide", response_model=StatewideSimulationResponse, status_code=status.HTTP_200_OK)
+def run_statewide_simulation(request: StatewideSimulationRequest) -> StatewideSimulationResponse:
+    """
+    Executes a multi-step simulation across the complete 1,000-persona statewide cohort across all 36 districts.
+    Aggregates macro KPIs across all 1,000 personas, compiles district-wise metrics, and returns detailed
+    profiles and interaction dialogues for exactly 10 deterministically selected featured personas.
+    """
+    try:
+        return SimulationService.execute_statewide_simulation(request)
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(ve)
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Statewide simulation execution failed: {str(e)}"
         )
 
 

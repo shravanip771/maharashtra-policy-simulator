@@ -61,7 +61,7 @@ def test_api_simulate_contract_and_reconciliation():
 
     # 1. Metadata verification
     assert data["metadata"]["district"] == "Dhule"
-    assert data["metadata"]["cohort_size"] == 10
+    assert data["metadata"]["cohort_size"] == 18
     assert data["metadata"]["simulation_steps"] == 2
     assert data["metadata"]["is_synthetic_poc"] is True
 
@@ -70,11 +70,11 @@ def test_api_simulate_contract_and_reconciliation():
     assert "district" in prov["grounded_reference_fields"]
     assert "initial_awareness" in prov["synthetic_behavioral_priors"]
 
-    # 3. Aggregate metrics reconciliation
+    # 3. Aggregate metrics reconciliation (calculated over full 18-persona cohort)
     agg = data["aggregate_metrics"]
-    assert agg["total_personas"] == 10
-    assert agg["eligible_count"] + agg["ineligible_count"] == 10
-    assert agg["eligible_count"] == 7
+    assert agg["total_personas"] == 18
+    assert agg["eligible_count"] + agg["ineligible_count"] == 18
+    assert agg["eligible_count"] == 12
     assert agg["realized_uptake_count"] <= agg["eligible_count"]
 
     # 4. Step metrics
@@ -84,9 +84,10 @@ def test_api_simulate_contract_and_reconciliation():
     assert steps[1]["step_number"] == 2
     assert steps[1]["mean_awareness"] >= steps[0]["mean_awareness"]
 
-    # 5. Personas output
+    # 5. Personas output (exactly 10 featured personas deterministically sampled)
     personas = data["personas"]
     assert len(personas) == 10
+    assert len(data["featured_personas"]) == 10
     for p in personas:
         assert p["persona_id"].startswith("DHULE-STU-")
         assert 0.0 <= p["initial_awareness"] <= 1.0

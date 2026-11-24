@@ -1122,18 +1122,26 @@ class SimulationEngine:
 
         if policy_mode == "statutory":
             rate_desc = "Statutory DTE Rules (2024.1-provisional; female/orphan 100% waiver, tiered male rates)"
+            male_prov_note = "PROVISIONAL ASSUMPTION: 50% examination fee relief for male candidates is provisional and awaiting verified primary GR confirmation."
+            assumptions = [
+                f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 50% for continuing students, first-year exempt).",
+                rate_desc,
+                male_prov_note,
+                f"Demographic fields grounded in Dhule 2010-11 education data; behavioral traits dynamically updated via peer diffusion."
+            ]
         elif policy_mode == "counterfactual":
             rate_desc = f"Counterfactual Policy Scenario ({policy_version})"
+            assumptions = [
+                f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 50% for continuing students, first-year exempt).",
+                rate_desc,
+                f"Demographic fields grounded in Dhule 2010-11 education data; behavioral traits dynamically updated via peer diffusion."
+            ]
         elif policy_mode == "override":
             rate_desc = f"Explicit override reimbursement rate: {assumed_reimbursement_rate * 100:.0f}%."
+            assumptions = []
         else:
             rate_desc = f"Legacy PoC Baseline (assumed uniform rate: {assumed_reimbursement_rate * 100:.0f}%)."
-
-        assumptions = [
-            f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 50% for continuing students, first-year exempt).",
-            rate_desc,
-            f"Demographic fields grounded in Dhule 2010-11 education data; behavioral traits dynamically updated via peer diffusion."
-        ]
+            assumptions = []
 
         return CohortSimulationResult(
             cohort_name=cohort_name,
