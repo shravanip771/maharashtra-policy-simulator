@@ -4,14 +4,21 @@ and packages the results into the frontend Data Contract.
 """
 
 import os
-from typing import Dict, List, Any
+import uuid
+import random
+from typing import Dict, List, Any, Optional, Tuple, Union
 
 from data.dhule_adapter import DhuleEducationDatasetAdapter
 from simulation.persona_generator import SyntheticPersonaGenerator
 from simulation.agent import StubLLMProvider, GeminiLLMProvider
-from simulation.engine import SimulationEngine, MultiStepSimulationResult, _safe_serialize
+from simulation.engine import SimulationEngine, MultiStepSimulationResult, SimulationStepOutput
 from simulation.policy_rules import RajarshiShahuPolicyEngine
-from simulation.district_config import get_district_profile
+from simulation.persona import StudentPersona
+from simulation.district_config import (
+    get_district_profile,
+    list_supported_districts,
+    STATEWIDE_POPULATION_ALLOCATION_36,
+)
 
 from backend.models import (
     SimulationRequest,
@@ -23,7 +30,13 @@ from backend.models import (
     NetworkTopology,
     PersonaOutput,
     InteractionRecordDTO,
-    DistrictSummaryDTO
+    StatewideCohortResponse,
+    StatewideSimulationRequest,
+    FeaturedPersonaDTO,
+    DistrictSimulationResultDTO,
+    StatewideSimulationSummaryDTO,
+    StatewideSimulationMetadataDTO,
+    StatewideSimulationResponse
 )
 
 
@@ -31,17 +44,25 @@ class SimulationService:
     """Service orchestrating persona generation, engine simulation, and DTO transformation."""
 
     @classmethod
-    def execute_simulation(cls, req: SimulationRequest) -> SimulationResponse:
-        # Resolve target district & statewide flag
-        target_district = (req.district or "Dhule").strip()
-        is_statewide = target_district.upper() in {"STATEWIDE", "ALL", "MAHARASHTRA"}
-
-        # Safety Guard: Explicitly reject statewide simulations with live Gemini AI mode
-        if is_statewide and req.use_gemini:
-            raise ValueError(
-                "Gemini live AI mode is restricted to single-district simulations to prevent rate exhaustion. "
-                "Statewide simulation across all 36 districts must be run in offline mode (use_gemini=False)."
+    def execute_simulation(
+        cls,
+        req: SimulationRequest
+    ) -> Union[SimulationResponse, StatewideSimulationResponse]:
+        """
+        Executes a multi-step simulation run for an individual district (or delegates to statewide).
+        Single district runs automatically resolve cohort size from STATEWIDE_POPULATION_ALLOCATION_36,
+        compute aggregate metrics over the entire cohort, and sample 10 featured personas with peer interactions.
+        """
+        # Resolve target district & check if statewide
+        raw_district = (req.district or "Dhule").strip()
+        if raw_district.upper() in {"STATEWIDE", "ALL", "MAHARASHTRA"}:
+            statewide_req = StatewideSimulationRequest(
+                simulation_steps=req.simulation_steps,
+                seed=req.seed,
+                use_gemini=req.use_gemini,
+                gemini_model=req.gemini_model
             )
+            return cls.execute_statewide_simulation(statewide_req)
 
         # 1. Resolve LLM Provider safely (offline stub by default)
         use_gemini = req.use_gemini or (os.getenv("USE_GEMINI", "0").strip() == "1")
@@ -55,85 +76,61 @@ class SimulationService:
             provider = StubLLMProvider()
             provider_label = "Deterministic Rule-Grounded Stub (Offline)"
 
-        # 2. Generate grounded synthetic cohort
-        if is_statewide:
-            per_district = req.cohort_size_per_district or 5
-            cohort = SyntheticPersonaGenerator.generate_statewide_cohort(
-                count_per_district=per_district,
-                seed=req.seed
+        # 2. Resolve district configuration
+        try:
+            district_profile = get_district_profile(raw_district)
+        except (KeyError, ValueError) as ke:
+            supported = ", ".join(list_supported_districts())
+            raise ValueError(f"Invalid district '{raw_district}'. Supported districts: {supported}") from ke
+
+        target_district_name = district_profile.district_name
+        if target_district_name not in STATEWIDE_POPULATION_ALLOCATION_36:
+            raise ValueError(
+                f"Unsupported or unconfigured district '{raw_district}'. Must be one of the 36 configured Maharashtra districts."
             )
-            resolved_district_name = "Maharashtra (Statewide)"
-            disclaimer = (
-                f"Statewide composite simulation across all 36 Maharashtra districts ({len(cohort)} synthetic personas; {per_district} per district). "
-                "Demographics combine official empirical tables (Dhule 2010-11, Mumbai City 2021-22) with calibrated provisional baseline districts. "
-                "Behavioral factors, network ties, and dialogue are synthetic simulation models, not empirical census facts."
-            )
-            epistemic_status = "statewide_composite"
+
+        # Cohort size automatically determined from STATEWIDE_POPULATION_ALLOCATION_36
+        cohort_size = STATEWIDE_POPULATION_ALLOCATION_36[target_district_name]
+        clean_prefix = "MUMSUB" if target_district_name == "Mumbai Suburban" else target_district_name.upper().replace(" ", "_")[:6]
+        id_prefix = f"{clean_prefix}-STU"
+
+        if target_district_name == "Dhule":
+            adapter = DhuleEducationDatasetAdapter()
+            config = adapter.create_population_config()
+            generator = SyntheticPersonaGenerator(config=config, seed=req.seed)
+            cohort = generator.generate_cohort(count=cohort_size, id_prefix=id_prefix, seed=req.seed)
         else:
-            if target_district.lower() == "mumbai":
-                target_district = "Mumbai City"
-
-            if target_district.lower() == "dhule":
-                adapter = DhuleEducationDatasetAdapter()
-                config = adapter.create_population_config()
-                generator = SyntheticPersonaGenerator(config=config, seed=req.seed, district="Dhule")
-                resolved_district_name = "Dhule"
-                disclaimer = (
-                    "Ground-truth demographics derived from official 2010-11 Dhule Educational Census table. "
-                    "Behavioral attributes, network ties, and dialogue are synthetic simulation models."
-                )
-                epistemic_status = "empirical_observed"
-            else:
-                profile = get_district_profile(target_district)
-                resolved_district_name = profile.district_name
-                generator = SyntheticPersonaGenerator.for_district(resolved_district_name, seed=req.seed)
-                if profile.provenance_tier == "empirical_observed":
-                    disclaimer = (
-                        f"Ground-truth demographics derived from {profile.source_reference} ({profile.reference_year}). "
-                        "Behavioral attributes, network ties, and dialogue are synthetic simulation models."
-                    )
-                    epistemic_status = "empirical_observed"
-                else:
-                    disclaimer = (
-                        f"Demographics for {resolved_district_name} District are provisional simulation baselines. "
-                        "Behavioral factors are synthetic simulation priors, not empirical census facts."
-                    )
-                    epistemic_status = "provisional"
-
-            id_prefix = f"{resolved_district_name.upper().replace(' ', '_')}-STU"
-            cohort = generator.generate_cohort(count=req.cohort_size, id_prefix=id_prefix, seed=req.seed)
+            generator = SyntheticPersonaGenerator.for_district(target_district_name, seed=req.seed)
+            cohort = generator.generate_cohort(count=cohort_size, id_prefix=id_prefix, seed=req.seed)
 
         # 3. Execute multi-step engine run
         engine = SimulationEngine(llm_provider=provider)
-        cohort_display_name = f"Maharashtra-Statewide-{len(cohort)}-Persona-Cohort" if is_statewide else f"{resolved_district_name}-{req.cohort_size}-Persona-Cohort"
         raw_result: MultiStepSimulationResult = engine.run_multistep_cohort(
             personas=cohort,
             total_steps=req.simulation_steps,
-            cohort_name=cohort_display_name,
+            cohort_name=f"{target_district_name}-{cohort_size}-Persona-Cohort",
             seed=req.seed,
             enable_social_interaction=True,
             max_connections_per_persona=2,
-            policy_mode=req.policy_mode,
-            assumed_reimbursement_rate=req.assumed_reimbursement_rate
         )
 
         # 4. Map Metadata & Provenance
         metadata = SimulationMetadata(
             scheme_name=RajarshiShahuPolicyEngine.SCHEME_NAME,
             scheme_code="RCSMS-EBC",
-            district=resolved_district_name,
-            cohort_size=len(cohort),
+            district=target_district_name,
+            cohort_size=cohort_size,
             simulation_steps=req.simulation_steps,
             seed=req.seed,
             llm_provider=provider_label,
             is_synthetic_poc=True,
-            assumed_reimbursement_rate=raw_result.assumed_reimbursement_rate or 0.50,
-            data_disclaimer=disclaimer,
-            requested_policy_mode=req.policy_mode,
-            resolved_policy_mode=raw_result.policy_mode,
-            is_counterfactual=raw_result.is_counterfactual,
-            policy_version="2024.1-provisional",
-            epistemic_status=epistemic_status
+            assumed_reimbursement_rate=0.50,
+            data_disclaimer=(
+                f"Demographics grounded in {target_district_name} district profile ({district_profile.provenance_tier}). "
+                f"District cohort size (N={cohort_size}) is a provisional synthetic quota derived from Census 2011 population proportions, "
+                "not a verified student-population census statistic. "
+                "Behavioral attributes, network ties, and dialogue are synthetic simulation models."
+            )
         )
 
         provenance = ProvenanceBreakdown(
@@ -152,7 +149,7 @@ class SimulationService:
             ]
         )
 
-        # 5. Map Final Step Aggregate Metrics
+        # 5. Map Final Step Aggregate Metrics over FULL cohort
         final_cohort_res = raw_result.step_cohort_results[-1]
         agg_metrics = AggregateMetrics(
             total_personas=final_cohort_res.total_personas,
@@ -166,10 +163,7 @@ class SimulationService:
             realized_uptake_count=final_cohort_res.benefit_received_count,
             realized_uptake_rate=round(final_cohort_res.uptake_rate, 4),
             total_estimated_fee_relief_inr=final_cohort_res.total_estimated_fee_relief_inr,
-            average_fee_relief_per_eligible_inr=final_cohort_res.average_fee_relief_per_eligible_inr,
-            total_tuition_fee_relief_inr=final_cohort_res.total_tuition_fee_relief_inr,
-            total_exam_fee_relief_inr=final_cohort_res.total_exam_fee_relief_inr,
-            cohort_effective_relief_rate=final_cohort_res.cohort_effective_relief_rate
+            average_fee_relief_per_eligible_inr=final_cohort_res.average_fee_relief_per_eligible_inr
         )
 
         # 6. Map Step Metrics
@@ -192,26 +186,64 @@ class SimulationService:
         # 7. Map Network Topology
         net_summary = raw_result.network_summary
         network = NetworkTopology(
-            total_nodes=net_summary.get("total_nodes", req.cohort_size),
+            total_nodes=net_summary.get("total_nodes", cohort_size),
             total_edges=net_summary.get("total_edges", 0),
             max_degree_limit=net_summary.get("max_degree_limit", 2),
             adjacency_list=net_summary.get("adjacency_list", {})
         )
 
-        # 8. Map Persona List with final decision traces
-        persona_name_map = {p.persona_id: p.name for p in cohort}
-        personas_out: List[PersonaOutput] = []
+        # 8. Deterministically select up to 10 featured personas using simulation seed
+        sample_rng = random.Random(req.seed)
+        k_sample = min(10, len(cohort))
+        featured_indices = sorted(sample_rng.sample(range(len(cohort)), k=k_sample))
+        featured_personas_raw = [cohort[i] for i in featured_indices]
+        featured_step_outs = [final_cohort_res.individual_results[i] for i in featured_indices]
+        featured_ids = {p.persona_id for p in featured_personas_raw}
 
-        for p, step_out in zip(cohort, final_cohort_res.individual_results):
+        persona_name_map = {p.persona_id: p.name for p in cohort}
+
+        # 9. Extract interactions involving the featured personas
+        featured_interactions_map: Dict[str, List[InteractionRecordDTO]] = {p_id: [] for p_id in featured_ids}
+        featured_interactions_all: List[InteractionRecordDTO] = []
+        seen_interaction_keys = set()
+        for s_idx in range(1, req.simulation_steps + 1):
+            for r in raw_result.interactions_by_step.get(s_idx, []):
+                s_id = r.get("sender_id", "")
+                r_id = r.get("receiver_id", "")
+                if s_id in featured_ids or r_id in featured_ids:
+                    dto = InteractionRecordDTO(
+                        simulation_step=s_idx,
+                        sender_id=s_id,
+                        sender_name=persona_name_map.get(s_id, s_id),
+                        receiver_id=r_id,
+                        receiver_name=persona_name_map.get(r_id, r_id),
+                        interaction_topic=r.get("interaction_topic", "SCHEME_AWARENESS"),
+                        sender_message=r.get("sender_message", ""),
+                        receiver_response=r.get("receiver_response", ""),
+                        state_changed=r.get("state_changed", False),
+                        state_changes=r.get("state_changes", {})
+                    )
+                    if s_id in featured_ids:
+                        featured_interactions_map[s_id].append(dto)
+                    if r_id in featured_ids:
+                        featured_interactions_map[r_id].append(dto)
+                    inter_key = (s_idx, s_id, r_id, dto.interaction_topic, dto.sender_message)
+                    if inter_key not in seen_interaction_keys:
+                        seen_interaction_keys.add(inter_key)
+                        featured_interactions_all.append(dto)
+
+        # 10. Map Featured Persona DTOs
+        personas_out: List[FeaturedPersonaDTO] = []
+        for p, step_out in zip(featured_personas_raw, featured_step_outs):
             ev = raw_result.state_evolution_summary.get(p.persona_id, {})
             personas_out.append(
-                PersonaOutput(
+                FeaturedPersonaDTO(
                     persona_id=p.persona_id,
                     name=p.name,
                     gender=p.gender,
                     age=p.age,
                     district=p.district,
-                    taluka=getattr(p, "taluka", p.district),
+                    taluka=getattr(p, "taluka", p.district) or p.district,
                     course_name=p.course_name,
                     is_professional_course=p.is_professional_course,
                     institution_type=p.institution_type.value,
@@ -238,89 +270,9 @@ class SimulationService:
                     stated_intention=step_out.stated_intention,
                     major_barriers=step_out.perceived_barriers,
                     inner_monologue=step_out.inner_monologue,
-                    reimbursement_rate=step_out.reimbursement_percentage,
-                    tuition_fee_relief_inr=step_out.tuition_fee_relief_inr,
-                    exam_fee_relief_inr=step_out.exam_fee_relief_inr,
-                    policy_details=_safe_serialize(step_out.policy_result) if step_out.policy_result else None
+                    interaction_history=featured_interactions_map.get(p.persona_id, [])
                 )
             )
-
-        # 9. Map All Interactions Across Steps
-        interactions_out: List[InteractionRecordDTO] = []
-        for s_idx in range(1, req.simulation_steps + 1):
-            raw_ints = raw_result.interactions_by_step.get(s_idx, [])
-            for r in raw_ints:
-                sender_id = r.get("sender_id", "")
-                receiver_id = r.get("receiver_id", "")
-                interactions_out.append(
-                    InteractionRecordDTO(
-                        simulation_step=s_idx,
-                        sender_id=sender_id,
-                        sender_name=persona_name_map.get(sender_id, sender_id),
-                        receiver_id=receiver_id,
-                        receiver_name=persona_name_map.get(receiver_id, receiver_id),
-                        interaction_topic=r.get("interaction_topic", "SCHEME_AWARENESS"),
-                        sender_message=r.get("sender_message", ""),
-                        receiver_response=r.get("receiver_response", ""),
-                        state_changed=r.get("state_changed", False),
-                        state_changes=r.get("state_changes", {})
-                    )
-                )
-
-        # 10. Map District Summaries for Statewide Execution
-        district_summaries: Optional[Dict[str, DistrictSummaryDTO]] = None
-        if is_statewide:
-            district_summaries = {}
-            from simulation.district_config import DISTRICT_REGISTRY
-
-            persona_obj_map = {p.persona_id: p for p in cohort}
-            grouped_steps: Dict[str, List[Any]] = {}
-            for step_res in final_cohort_res.individual_results:
-                p_obj = persona_obj_map.get(step_res.persona_id)
-                d_name = p_obj.district if p_obj else step_res.demographics_summary.get("district", "Unknown")
-                grouped_steps.setdefault(d_name, []).append(step_res)
-
-            for prof in DISTRICT_REGISTRY.values():
-                d_name = prof.district_name
-                s_list = grouped_steps.get(d_name, [])
-                d_total = len(s_list)
-                d_eligible = sum(1 for r in s_list if r.is_eligible)
-                d_ineligible = d_total - d_eligible
-                d_eligibility_rate = round(d_eligible / d_total, 4) if d_total > 0 else 0.0
-                d_relief = round(sum(r.estimated_fee_relief_inr for r in s_list), 2)
-                d_avg_relief = round(d_relief / d_eligible, 2) if d_eligible > 0 else 0.0
-                d_awareness = round(sum(r.awareness_score for r in s_list) / d_total, 4) if d_total > 0 else 0.0
-                d_benefit = round(sum(r.perceived_benefit_score for r in s_list) / d_total, 4) if d_total > 0 else 0.0
-                d_app_prob = round(sum(r.application_probability for r in s_list) / d_total, 4) if d_total > 0 else 0.0
-                d_uptake_prob = round(sum(r.expected_uptake_probability for r in s_list) / d_total, 4) if d_total > 0 else 0.0
-                d_uptake_count = sum(1 for r in s_list if r.benefit_received)
-                d_uptake_rate = round(d_uptake_count / d_total, 4) if d_total > 0 else 0.0
-
-                d_talukas = sorted(list({
-                    persona_obj_map[r.persona_id].taluka
-                    for r in s_list
-                    if r.persona_id in persona_obj_map and hasattr(persona_obj_map[r.persona_id], "taluka")
-                }))
-
-                district_summaries[d_name] = DistrictSummaryDTO(
-                    district_name=d_name,
-                    district_code=prof.district_id,
-                    division=prof.division,
-                    provenance_tier=prof.provenance_tier,
-                    total_personas=d_total,
-                    eligible_count=d_eligible,
-                    ineligible_count=d_ineligible,
-                    eligibility_rate=d_eligibility_rate,
-                    mean_awareness=d_awareness,
-                    mean_perceived_benefit=d_benefit,
-                    mean_application_probability=d_app_prob,
-                    expected_uptake_probability=d_uptake_prob,
-                    realized_uptake_count=d_uptake_count,
-                    realized_uptake_rate=d_uptake_rate,
-                    total_estimated_fee_relief_inr=d_relief,
-                    average_fee_relief_per_eligible_inr=d_avg_relief,
-                    talukas_represented=d_talukas
-                )
 
         return SimulationResponse(
             metadata=metadata,
@@ -329,7 +281,366 @@ class SimulationService:
             step_metrics=step_metrics,
             network_topology=network,
             personas=personas_out,
-            interactions=interactions_out,
-            is_statewide=is_statewide,
-            district_summaries=district_summaries
+            interactions=featured_interactions_all,
+            featured_personas=personas_out,
+            is_statewide=False
+        )
+
+    @classmethod
+    def generate_statewide_cohort(cls, seed: int = 42) -> StatewideCohortResponse:
+        """
+        Generates the statewide cohort of 1,000 student personas distributed across
+        all 36 configured districts according to Census 2011 population weighting.
+        Evaluates baseline statutory eligibility for each persona.
+        """
+        cohort = SyntheticPersonaGenerator.generate_weighted_state_population(
+            district_quotas=STATEWIDE_POPULATION_ALLOCATION_36,
+            seed=seed
+        )
+        personas_out: List[PersonaOutput] = []
+
+        for p in cohort:
+            eval_res = RajarshiShahuPolicyEngine.evaluate_eligibility(p)
+            personas_out.append(
+                PersonaOutput(
+                    persona_id=p.persona_id,
+                    name=p.name,
+                    gender=p.gender,
+                    age=p.age,
+                    district=p.district,
+                    taluka=getattr(p, "taluka", p.district) or p.district,
+                    course_name=p.course_name,
+                    is_professional_course=p.is_professional_course,
+                    institution_type=p.institution_type.value,
+                    admission_mode=p.admission_mode.value,
+                    caste_category=p.caste_category,
+                    family_income=p.family_income,
+                    annual_tuition_fee=p.annual_tuition_fee,
+                    attendance_percentage=p.attendance_percentage,
+                    previous_year_passed=p.previous_year_passed,
+                    first_generation_learner=p.first_generation_learner,
+                    is_statutorily_eligible=eval_res.is_eligible,
+                    estimated_fee_relief_inr=eval_res.estimated_fee_relief_inr,
+                    statutory_failure_reasons=eval_res.failure_reasons,
+                    initial_awareness=p.initial_awareness,
+                    final_awareness=p.initial_awareness,
+                    awareness_gain=0.0,
+                    initial_trust=p.institutional_trust,
+                    final_trust=p.institutional_trust,
+                    digital_literacy=p.digital_literacy,
+                    document_readiness=p.document_readiness,
+                    application_probability=0.0,
+                    completion_probability=0.0,
+                    final_state=p.current_state.value,
+                    stated_intention="Cohort baseline initialized (pre-simulation).",
+                    major_barriers=[],
+                    inner_monologue=""
+                )
+            )
+
+        return StatewideCohortResponse(
+            total_count=len(cohort),
+            district_allocations=STATEWIDE_POPULATION_ALLOCATION_36,
+            missing_district="None (All 36 districts allocated)",
+            seed=seed,
+            personas=personas_out,
+        )
+
+    @classmethod
+    def execute_statewide_simulation(
+        cls,
+        req: StatewideSimulationRequest,
+    ) -> StatewideSimulationResponse:
+        """
+        Executes a multi-step simulation across the complete 1,000-persona statewide cohort.
+        Aggregates macro KPIs across all 1,000 personas, compiles district-wise outcomes for all
+        36 districts, and deterministically samples exactly 10 featured personas with complete
+        peer interaction histories for frontend presentation.
+        """
+        # 1. Setup LLM provider
+        if req.use_gemini:
+            model_name = req.gemini_model or "gemini-3.1-flash-lite"
+            provider = GeminiLLMProvider(model_name=model_name, fallback_to_stub=True)
+            provider_label = f"Google Gemini API ({model_name})"
+        else:
+            provider = StubLLMProvider()
+            provider_label = "Deterministic Rule-Grounded Stub (Offline)"
+
+        # 2. Generate complete statewide cohort across 36 districts (N=1,000)
+        cohort = SyntheticPersonaGenerator.generate_weighted_state_population(
+            district_quotas=STATEWIDE_POPULATION_ALLOCATION_36,
+            seed=req.seed
+        )
+
+        run_id = f"statewide-run-{uuid.uuid4()}"
+
+        # 3. Execute multi-step simulation on the complete 1,000 cohort
+        engine = SimulationEngine(llm_provider=provider)
+        raw_result: MultiStepSimulationResult = engine.run_multistep_cohort(
+            personas=cohort,
+            total_steps=req.simulation_steps,
+            cohort_name="Maharashtra-Statewide-1000-Cohort",
+            seed=req.seed,
+            enable_social_interaction=True,
+            max_connections_per_persona=2,
+        )
+
+        final_cohort_res = raw_result.final_cohort_result
+        persona_name_map = {p.persona_id: p.name for p in cohort}
+
+        # 4. Deterministically select 10 featured personas using simulation seed
+        sample_rng = random.Random(req.seed)
+        featured_indices = sorted(sample_rng.sample(range(len(cohort)), k=10))
+        featured_personas_raw = [cohort[i] for i in featured_indices]
+        featured_step_outs = [final_cohort_res.individual_results[i] for i in featured_indices]
+        featured_ids = {p.persona_id for p in featured_personas_raw}
+
+        # 5. Extract interactions involving the featured personas
+        featured_interactions_map: Dict[str, List[InteractionRecordDTO]] = {p_id: [] for p_id in featured_ids}
+        featured_interactions_all: List[InteractionRecordDTO] = []
+        seen_interaction_keys = set()
+        for s_idx in range(1, req.simulation_steps + 1):
+            for r in raw_result.interactions_by_step.get(s_idx, []):
+                s_id = r.get("sender_id", "")
+                r_id = r.get("receiver_id", "")
+                if s_id in featured_ids or r_id in featured_ids:
+                    dto = InteractionRecordDTO(
+                        simulation_step=s_idx,
+                        sender_id=s_id,
+                        sender_name=persona_name_map.get(s_id, s_id),
+                        receiver_id=r_id,
+                        receiver_name=persona_name_map.get(r_id, r_id),
+                        interaction_topic=r.get("interaction_topic", "SCHEME_AWARENESS"),
+                        sender_message=r.get("sender_message", ""),
+                        receiver_response=r.get("receiver_response", ""),
+                        state_changed=r.get("state_changed", False),
+                        state_changes=r.get("state_changes", {})
+                    )
+                    if s_id in featured_ids:
+                        featured_interactions_map[s_id].append(dto)
+                    if r_id in featured_ids:
+                        featured_interactions_map[r_id].append(dto)
+                    inter_key = (s_idx, s_id, r_id, dto.interaction_topic, dto.sender_message)
+                    if inter_key not in seen_interaction_keys:
+                        seen_interaction_keys.add(inter_key)
+                        featured_interactions_all.append(dto)
+
+        # 6. Map Featured Personas DTOs
+        featured_dtos: List[FeaturedPersonaDTO] = []
+        for p, step_out in zip(featured_personas_raw, featured_step_outs):
+            ev = raw_result.state_evolution_summary.get(p.persona_id, {})
+            featured_dtos.append(
+                FeaturedPersonaDTO(
+                    persona_id=p.persona_id,
+                    name=p.name,
+                    gender=p.gender,
+                    age=p.age,
+                    district=p.district,
+                    taluka=getattr(p, "taluka", p.district) or p.district,
+                    course_name=p.course_name,
+                    is_professional_course=p.is_professional_course,
+                    institution_type=p.institution_type.value,
+                    admission_mode=p.admission_mode.value,
+                    caste_category=p.caste_category,
+                    family_income=p.family_income,
+                    annual_tuition_fee=p.annual_tuition_fee,
+                    attendance_percentage=p.attendance_percentage,
+                    previous_year_passed=p.previous_year_passed,
+                    first_generation_learner=p.first_generation_learner,
+                    is_statutorily_eligible=step_out.is_eligible,
+                    estimated_fee_relief_inr=step_out.estimated_fee_relief_inr,
+                    statutory_failure_reasons=step_out.statutory_failure_reasons,
+                    initial_awareness=ev.get("initial_awareness", p.initial_awareness),
+                    final_awareness=ev.get("final_awareness", p.initial_awareness),
+                    awareness_gain=ev.get("awareness_gain", 0.0),
+                    initial_trust=ev.get("initial_trust", p.institutional_trust),
+                    final_trust=ev.get("final_trust", p.institutional_trust),
+                    digital_literacy=p.digital_literacy,
+                    document_readiness=p.document_readiness,
+                    application_probability=round(step_out.application_probability, 4),
+                    completion_probability=round(step_out.completion_probability, 4),
+                    final_state=step_out.final_simulation_state,
+                    stated_intention=step_out.stated_intention,
+                    major_barriers=step_out.perceived_barriers,
+                    inner_monologue=step_out.inner_monologue,
+                    interaction_history=featured_interactions_map.get(p.persona_id, [])
+                )
+            )
+
+        # 7. Aggregate District Results across all 36 districts using ALL 1,000 personas
+        district_results: List[DistrictSimulationResultDTO] = []
+        district_personas_map: Dict[str, List[Tuple[StudentPersona, SimulationStepOutput]]] = {
+            d: [] for d in STATEWIDE_POPULATION_ALLOCATION_36
+        }
+        for p, step_out in zip(cohort, final_cohort_res.individual_results):
+            if p.district in district_personas_map:
+                district_personas_map[p.district].append((p, step_out))
+            else:
+                district_personas_map.setdefault(p.district, []).append((p, step_out))
+
+        district_summaries_dict: Dict[str, Any] = {}
+
+        for dist_name, expected_count in STATEWIDE_POPULATION_ALLOCATION_36.items():
+            dp_list = district_personas_map.get(dist_name, [])
+            d_total = len(dp_list)
+            d_eligible = sum(1 for _, so in dp_list if so.is_eligible)
+            d_ineligible = d_total - d_eligible
+            d_attempted = sum(1 for _, so in dp_list if so.attempted_application)
+            d_completed = sum(1 for _, so in dp_list if so.completed_application)
+            d_beneficiaries = sum(1 for _, so in dp_list if so.benefit_received)
+            d_relief = sum(so.estimated_fee_relief_inr for _, so in dp_list)
+            d_avg_relief = round(d_relief / d_eligible, 2) if d_eligible > 0 else 0.0
+            d_mean_aw = round(sum(so.awareness_score for _, so in dp_list) / d_total, 4) if d_total > 0 else 0.0
+            d_mean_app_prob = round(sum(so.application_probability for _, so in dp_list) / d_total, 4) if d_total > 0 else 0.0
+            d_uptake_rate = round(d_beneficiaries / d_total, 4) if d_total > 0 else 0.0
+            d_elig_rate = round(d_eligible / d_total, 4) if d_total > 0 else 0.0
+
+            d_result = DistrictSimulationResultDTO(
+                district_name=dist_name,
+                allocated_personas=d_total,
+                eligible_count=d_eligible,
+                ineligible_count=d_ineligible,
+                eligibility_rate=d_elig_rate,
+                attempted_applications=d_attempted,
+                completed_applications=d_completed,
+                realized_beneficiaries=d_beneficiaries,
+                uptake_rate=d_uptake_rate,
+                total_estimated_fee_relief_inr=d_relief,
+                average_relief_per_eligible_inr=d_avg_relief,
+                mean_awareness=d_mean_aw,
+                mean_application_probability=d_mean_app_prob
+            )
+            district_results.append(d_result)
+
+            # Build district summary dict for frontend inspector & drill-down
+            district_summaries_dict[dist_name] = {
+                "district_name": dist_name,
+                "total_personas": d_total,
+                "allocated_personas": d_total,
+                "cohort_size": d_total,
+                "eligible_count": d_eligible,
+                "ineligible_count": d_ineligible,
+                "eligibility_rate": d_elig_rate,
+                "attempted_applications": d_attempted,
+                "completed_applications": d_completed,
+                "realized_beneficiaries": d_beneficiaries,
+                "realized_uptake_count": d_beneficiaries,
+                "realized_uptake_rate": d_uptake_rate,
+                "uptake_rate": d_uptake_rate,
+                "expected_uptake_probability": d_mean_app_prob,
+                "mean_awareness": d_mean_aw,
+                "mean_application_probability": d_mean_app_prob,
+                "total_estimated_fee_relief_inr": d_relief,
+                "average_fee_relief_per_eligible_inr": d_avg_relief,
+                "average_relief_per_eligible_inr": d_avg_relief,
+            }
+
+        # 8. Compute Top Barriers and Step Metrics across all 1,000 personas
+        barrier_counts: Dict[str, int] = {}
+        for so in final_cohort_res.individual_results:
+            for b in so.perceived_barriers:
+                barrier_counts[b] = barrier_counts.get(b, 0) + 1
+
+        step_metrics: List[StepMetric] = []
+        for s_idx, s_res in enumerate(raw_result.step_cohort_results, start=1):
+            interactions_in_step = raw_result.interactions_by_step.get(s_idx, [])
+            step_metrics.append(
+                StepMetric(
+                    step_number=s_idx,
+                    eligible_count=s_res.eligible_count,
+                    mean_awareness=round(s_res.average_awareness_score, 4),
+                    mean_perceived_benefit=round(s_res.average_perceived_benefit_score, 4),
+                    mean_application_probability=round(s_res.average_application_probability, 4),
+                    expected_uptake_probability=round(s_res.average_expected_uptake_probability, 4),
+                    realized_uptake_count=s_res.benefit_received_count,
+                    interaction_count=len(interactions_in_step)
+                )
+            )
+
+        # Initial vs Final awareness means
+        initial_awarenesses = [p.initial_awareness for p in cohort]
+        mean_initial_aw = round(sum(initial_awarenesses) / len(initial_awarenesses), 4) if initial_awarenesses else 0.0
+        mean_final_aw = round(final_cohort_res.average_awareness_score, 4)
+        mean_gain = round(mean_final_aw - mean_initial_aw, 4)
+
+        # 9. Build Summary DTO
+        summary_dto = StatewideSimulationSummaryDTO(
+            total_personas=final_cohort_res.total_personas,
+            eligible_count=final_cohort_res.eligible_count,
+            ineligible_count=final_cohort_res.ineligible_count,
+            eligibility_rate=round(final_cohort_res.eligibility_rate, 4),
+            mean_initial_awareness=mean_initial_aw,
+            mean_final_awareness=mean_final_aw,
+            mean_awareness_gain=mean_gain,
+            mean_perceived_benefit=round(final_cohort_res.average_perceived_benefit_score, 4),
+            mean_application_probability=round(final_cohort_res.average_application_probability, 4),
+            expected_uptake_probability=round(final_cohort_res.average_expected_uptake_probability, 4),
+            attempted_applications_count=final_cohort_res.attempted_application_count,
+            completed_applications_count=final_cohort_res.completed_application_count,
+            realized_beneficiaries_count=final_cohort_res.benefit_received_count,
+            realized_uptake_rate=round(final_cohort_res.uptake_rate, 4),
+            total_estimated_fee_relief_inr=final_cohort_res.total_estimated_fee_relief_inr,
+            average_fee_relief_per_eligible_inr=final_cohort_res.average_fee_relief_per_eligible_inr,
+            ineligibility_reasons_summary=final_cohort_res.ineligibility_reasons_summary,
+            simulation_state_distribution=final_cohort_res.state_distribution,
+            top_application_barriers=barrier_counts,
+            step_metrics=step_metrics
+        )
+
+        metadata_dto = StatewideSimulationMetadataDTO(
+            run_id=run_id,
+            seed=req.seed,
+            simulation_steps=req.simulation_steps,
+            scheme_name=RajarshiShahuPolicyEngine.SCHEME_NAME,
+            scheme_code="RCSMS-EBC",
+            total_districts_configured=len(STATEWIDE_POPULATION_ALLOCATION_36),
+            total_personas_processed=len(cohort),
+            llm_provider=provider_label,
+            completion_status="SUCCESS",
+            assumed_reimbursement_rate=0.50,
+            data_disclaimer=(
+                "Statewide cohort (N=1,000) proportionally allocated across all 36 Maharashtra districts. "
+                "District allocations are provisional synthetic quotas derived from Census 2011 population weighting, "
+                "not verified student-population statistics or administrative census facts. "
+                "Demographics grounded in division-level urbanization and census benchmarks. "
+                "Behavioral attributes, peer diffusion dynamics, and dialogue are synthetic simulation models."
+            )
+        )
+
+        # Build frontend aggregate_metrics dict
+        frontend_aggregates = {
+            "total_personas": summary_dto.total_personas,
+            "eligible_count": summary_dto.eligible_count,
+            "ineligible_count": summary_dto.ineligible_count,
+            "eligibility_rate": summary_dto.eligibility_rate,
+            "mean_awareness": summary_dto.mean_final_awareness,
+            "mean_perceived_benefit": summary_dto.mean_perceived_benefit,
+            "mean_application_probability": summary_dto.mean_application_probability,
+            "expected_uptake_probability": summary_dto.expected_uptake_probability,
+            "realized_uptake_count": summary_dto.realized_beneficiaries_count,
+            "realized_uptake_rate": summary_dto.realized_uptake_rate,
+            "total_estimated_fee_relief_inr": summary_dto.total_estimated_fee_relief_inr,
+            "average_fee_relief_per_eligible_inr": summary_dto.average_fee_relief_per_eligible_inr,
+        }
+
+        return StatewideSimulationResponse(
+            simulation_summary=summary_dto,
+            district_results=district_results,
+            featured_personas=featured_dtos,
+            simulation_metadata=metadata_dto,
+            interactions=featured_interactions_all,
+            is_statewide=True,
+            aggregate_metrics=frontend_aggregates,
+            personas=featured_dtos,
+            district_summaries=district_summaries_dict,
+            metadata={
+                "district": "Maharashtra",
+                "cohort_size": 1000,
+                "simulation_steps": req.simulation_steps,
+                "seed": req.seed,
+                "llm_provider": provider_label,
+                "is_synthetic_poc": True,
+                "assumed_reimbursement_rate": 0.50,
+                "data_disclaimer": metadata_dto.data_disclaimer
+            }
         )

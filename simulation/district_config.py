@@ -24,6 +24,41 @@ from simulation.persona_schema import PopulationDistributionConfig
 from simulation.persona_generator import EXAMPLE_POPULATION_CONFIG
 
 
+# ==============================================================================
+# PROVISIONAL INCOME BRACKET ARCHETYPES BY REGION TYPE
+# ------------------------------------------------------------------------------
+# Epistemic note: These regional income distributions are calibrated provisional
+# synthetic priors based on division-level urbanization, cost-of-living tiers,
+# and economic composition across Maharashtra. They prevent identical uniform
+# economic profiles across disparate rural and metropolitan districts while
+# preserving epistemic transparency.
+# ==============================================================================
+
+PROVISIONAL_INCOME_BRACKETS_BY_REGION_TYPE: Dict[str, List[Dict[str, Any]]] = {
+    "Urban": [
+        {"label": "Below 1.5 Lakh", "min_inr": 60000.0, "max_inr": 150000.0, "weight": 0.18},
+        {"label": "1.5 Lakh - 3.5 Lakh", "min_inr": 150000.0, "max_inr": 350000.0, "weight": 0.27},
+        {"label": "3.5 Lakh - 6.0 Lakh", "min_inr": 350000.0, "max_inr": 600000.0, "weight": 0.25},
+        {"label": "6.0 Lakh - 8.0 Lakh", "min_inr": 600000.0, "max_inr": 800000.0, "weight": 0.15},
+        {"label": "Above 8.0 Lakh", "min_inr": 800000.0, "max_inr": 1500000.0, "weight": 0.15},
+    ],
+    "Semi-Urban": [
+        {"label": "Below 1.5 Lakh", "min_inr": 50000.0, "max_inr": 150000.0, "weight": 0.28},
+        {"label": "1.5 Lakh - 3.5 Lakh", "min_inr": 150000.0, "max_inr": 350000.0, "weight": 0.37},
+        {"label": "3.5 Lakh - 6.0 Lakh", "min_inr": 350000.0, "max_inr": 600000.0, "weight": 0.20},
+        {"label": "6.0 Lakh - 8.0 Lakh", "min_inr": 600000.0, "max_inr": 800000.0, "weight": 0.10},
+        {"label": "Above 8.0 Lakh", "min_inr": 800000.0, "max_inr": 1200000.0, "weight": 0.05},
+    ],
+    "Rural": [
+        {"label": "Below 1.5 Lakh", "min_inr": 40000.0, "max_inr": 150000.0, "weight": 0.45},
+        {"label": "1.5 Lakh - 3.5 Lakh", "min_inr": 150000.0, "max_inr": 350000.0, "weight": 0.37},
+        {"label": "3.5 Lakh - 6.0 Lakh", "min_inr": 350000.0, "max_inr": 600000.0, "weight": 0.12},
+        {"label": "6.0 Lakh - 8.0 Lakh", "min_inr": 600000.0, "max_inr": 800000.0, "weight": 0.04},
+        {"label": "Above 8.0 Lakh", "min_inr": 800000.0, "max_inr": 1100000.0, "weight": 0.02},
+    ],
+}
+
+
 @dataclass
 class DistrictProfile:
     """
@@ -86,7 +121,13 @@ class DistrictProfile:
         by SyntheticPersonaGenerator.
         """
         base = EXAMPLE_POPULATION_CONFIG
-        inc_brackets = self.income_brackets or base.income_brackets
+        if self.income_brackets is not None:
+            inc_brackets = self.income_brackets
+        else:
+            inc_brackets = PROVISIONAL_INCOME_BRACKETS_BY_REGION_TYPE.get(
+                self.region_type,
+                base.income_brackets
+            )
         first_names = self.first_names_by_gender or base.first_names_by_gender
         last_names = self.last_names or base.last_names
 
@@ -3340,6 +3381,113 @@ DISTRICT_REGISTRY: Dict[str, DistrictProfile] = {
 
 
 # ==============================================================================
+# PROVISIONAL 2011 TOTAL-POPULATION-WEIGHTED STATE ALLOCATION (36 DISTRICTS, N=1,000)
+# ------------------------------------------------------------------------------
+# Epistemic note: This allocation is derived from Census 2011 total general
+# population distribution across Maharashtra. Exactly 10 personas are allocated
+# to Chhatrapati Sambhajinagar, and the remaining 990 personas are distributed
+# across the other 35 districts using the largest-remainder proportional method
+# to preserve relative population shares.
+# Total allocation across all 36 districts sums to exactly 1,000 personas.
+# This is a provisional simulation cohort and does NOT represent verified
+# higher education or collegiate student enrollment statistics.
+# ==============================================================================
+
+STATEWIDE_POPULATION_ALLOCATION_36: Dict[str, int] = {
+    "Ahilyanagar": 40,
+    "Akola": 16,
+    "Amravati": 26,
+    "Beed": 23,
+    "Bhandara": 11,
+    "Buldhana": 23,
+    "Chandrapur": 20,
+    "Chhatrapati Sambhajinagar": 10,
+    "Dhule": 18,
+    "Gadchiroli": 9,
+    "Gondia": 12,
+    "Hingoli": 10,
+    "Jalgaon": 37,
+    "Jalna": 17,
+    "Kolhapur": 34,
+    "Latur": 22,
+    "Mumbai City": 28,
+    "Mumbai Suburban": 83,
+    "Nagpur": 41,
+    "Nanded": 29,
+    "Nandurbar": 15,
+    "Nashik": 54,
+    "Dharashiv": 15,
+    "Palghar": 27,
+    "Parbhani": 16,
+    "Pune": 83,
+    "Raigad": 23,
+    "Ratnagiri": 14,
+    "Sangli": 25,
+    "Satara": 27,
+    "Sindhudurg": 8,
+    "Solapur": 38,
+    "Thane": 98,
+    "Wardha": 12,
+    "Washim": 11,
+    "Yavatmal": 25,
+}
+
+PROVISIONAL_TOTAL_POPULATION_WEIGHTED_ALLOCATION_36: Dict[str, int] = STATEWIDE_POPULATION_ALLOCATION_36
+
+# Historical 35-district allocation maintained for backward compatibility
+PROVISIONAL_2011_TOTAL_POPULATION_WEIGHTED_ALLOCATION_35: Dict[str, int] = {
+    "Ahilyanagar": 41,
+    "Akola": 16,
+    "Amravati": 26,
+    "Beed": 23,
+    "Bhandara": 11,
+    "Buldhana": 23,
+    "Chandrapur": 20,
+    "Dhule": 18,
+    "Gadchiroli": 9,
+    "Gondia": 12,
+    "Hingoli": 10,
+    "Jalgaon": 38,
+    "Jalna": 17,
+    "Kolhapur": 35,
+    "Latur": 22,
+    "Mumbai City": 28,
+    "Mumbai Suburban": 84,
+    "Nagpur": 42,
+    "Nanded": 30,
+    "Nandurbar": 15,
+    "Nashik": 55,
+    "Dharashiv": 15,
+    "Palghar": 27,
+    "Parbhani": 16,
+    "Pune": 84,
+    "Raigad": 23,
+    "Ratnagiri": 14,
+    "Sangli": 25,
+    "Satara": 27,
+    "Sindhudurg": 8,
+    "Solapur": 39,
+    "Thane": 99,
+    "Wardha": 12,
+    "Washim": 11,
+    "Yavatmal": 25,
+}
+
+MISSING_36TH_DISTRICT: str = "Chhatrapati Sambhajinagar"
+
+# Historical and alternative name aliases for robust district resolution
+DISTRICT_NAME_ALIASES: Dict[str, str] = {
+    "AHMEDNAGAR": "AHILYANAGAR",
+    "AHMED_NAGAR": "AHILYANAGAR",
+    "OSMANABAD": "DHARASHIV",
+    "OSMANABAD_(DHARASHIV)": "DHARASHIV",
+    "OSMANABAD_DHARASHIV": "DHARASHIV",
+    "AURANGABAD": "CHHATRAPATI_SAMBHAJINAGAR",
+    "CHHATRAPATI_SAMBHAJI_NAGAR": "CHHATRAPATI_SAMBHAJINAGAR",
+}
+
+
+# ==============================================================================
 # HELPER FUNCTIONS & REGISTRY ACCESSORS
 # ==============================================================================
 
@@ -3351,16 +3499,38 @@ def list_supported_districts() -> List[str]:
 def get_district_profile(district_identifier: str) -> DistrictProfile:
     """
     Retrieves a DistrictProfile by district ID (e.g. 'DHULE') or district name (e.g. 'Dhule').
-    Case-insensitive and normalizes spaces/hyphens.
+    Case-insensitive, normalizes spaces/hyphens/parentheses, and resolves historical name aliases.
     """
-    key = district_identifier.strip().upper().replace(" ", "_").replace("-", "_")
+    raw = district_identifier.strip().upper()
+    cleaned = raw.replace("(", "").replace(")", "").replace(" ", "_").replace("-", "_")
+    key = raw.replace(" ", "_").replace("-", "_")
+
     if key in DISTRICT_REGISTRY:
         return DISTRICT_REGISTRY[key]
+    if cleaned in DISTRICT_REGISTRY:
+        return DISTRICT_REGISTRY[cleaned]
+    if key in DISTRICT_NAME_ALIASES:
+        return DISTRICT_REGISTRY[DISTRICT_NAME_ALIASES[key]]
+    if cleaned in DISTRICT_NAME_ALIASES:
+        return DISTRICT_REGISTRY[DISTRICT_NAME_ALIASES[cleaned]]
 
-    # Search by exact or normalized district_name
+    # Search by exact or normalized district_name or district_id
+    norm_id = district_identifier.strip().lower()
     for p in DISTRICT_REGISTRY.values():
-        if p.district_name.lower() == district_identifier.strip().lower():
+        if p.district_name.lower() == norm_id:
             return p
+        if p.district_id.lower() == norm_id:
+            return p
+
+    # Handle alias search in lower case
+    lower_aliases = {
+        "ahmednagar": "AHILYANAGAR",
+        "osmanabad": "DHARASHIV",
+        "osmanabad (dharashiv)": "DHARASHIV",
+        "aurangabad": "CHHATRAPATI_SAMBHAJINAGAR",
+    }
+    if norm_id in lower_aliases:
+        return DISTRICT_REGISTRY[lower_aliases[norm_id]]
 
     supported = ", ".join(list_supported_districts())
     raise KeyError(f"District '{district_identifier}' not found in registry. Supported districts: {supported}")

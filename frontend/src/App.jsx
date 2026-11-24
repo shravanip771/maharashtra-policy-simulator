@@ -160,21 +160,18 @@ function MainDashboard() {
       const payload = isStatewideTarget
         ? {
             district: 'STATEWIDE',
-            cohort_size: 180,
-            cohort_size_per_district: 5,
             simulation_steps: numSteps,
             seed: 42,
-            use_gemini: false // Keep use_gemini: false for statewide per Phase 1B.1 guard
+            use_gemini: false
           }
         : {
             district: selectedDistrict.name,
-            cohort_size: cohortSize,
             simulation_steps: numSteps,
             seed: 42,
             use_gemini: useGemini
           };
 
-      const response = await fetch('/api/simulate', {
+      const response = await fetch(isStatewideTarget ? '/api/simulate/statewide' : '/api/simulate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json'
@@ -246,7 +243,7 @@ function MainDashboard() {
           <div className="ps-card" style={{ borderLeft: '4px solid var(--accent-terracotta)', marginBottom: '16px' }}>
             <span style={{ fontWeight: 600, color: 'var(--accent-terracotta)' }}>
               {isStatewideTarget
-                ? 'Simulating statewide policy cohort across all 36 districts (180 synthetic personas)...'
+                ? 'Simulating statewide policy cohort across all 36 districts (1,000 synthetic personas)...'
                 : `Simulating policy cohort for ${selectedDistrict.name} District...`}
             </span>
           </div>
@@ -441,7 +438,7 @@ function MainDashboard() {
                       margin: '2px 0 0'
                     }}
                   >
-                    {selectedDistrict.name} District Results ({personas.length} synthetic personas)
+                    {selectedDistrict.name} District Outcomes ({aggregates?.total_personas ?? aggregates?.cohort_size ?? personas.length} synthetic personas)
                   </h3>
                   <p
                     style={{
@@ -450,7 +447,9 @@ function MainDashboard() {
                       margin: '4px 0 0'
                     }}
                   >
-                    Filtered locally from the 36-district statewide simulation run. No additional API call required.
+                    {personas.length > 0
+                      ? `Displaying ${personas.length} featured persona(s) sampled from ${selectedDistrict.name} during the statewide simulation.`
+                      : `Statewide metrics aggregated from the 1,000-persona cohort. Click "Run Simulation (${selectedDistrict.name})" above to simulate this district's full cohort.`}
                   </p>
                 </div>
                 <button
@@ -489,7 +488,7 @@ function MainDashboard() {
               Maharashtra 36-District Policy Simulation Engine Active
             </p>
             <p style={{ fontSize: '13px', marginTop: '6px', maxWidth: '540px', margin: '6px auto 0' }}>
-              Click &ldquo;Run Statewide Simulation&rdquo; above to simulate the policy cohort across all 36 districts of Maharashtra (180 personas), or select a district on the map for single-district analysis.
+              Click &ldquo;Run Statewide Simulation&rdquo; above to simulate the policy cohort across all 36 districts of Maharashtra (1,000 personas), or select a district on the map for single-district analysis.
             </p>
           </section>
         )}
