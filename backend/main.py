@@ -5,7 +5,10 @@ Exposes REST endpoints to trigger multi-step simulations and query system health
 
 import os
 from typing import Dict, Any, List
-from fastapi import FastAPI, HTTPException, Query, status
+from fastapi import FastAPI, HTTPException, Query, Request, status
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.models import (
@@ -18,12 +21,23 @@ from backend.models import (
 from backend.service import SimulationService
 from backend.auth.router import auth_router
 from simulation.policy_rules import RajarshiShahuPolicyEngine
+from simulation.district_config import list_supported_districts
 
 app = FastAPI(
     title="Maharashtra Policy Simulator API",
     description="Agent-based policy uptake and social interaction simulation engine for Maharashtra education schemes.",
     version="1.0.0"
 )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(request: Request, exc: RequestValidationError):
+    errors = exc.errors()
+    msg = "; ".join(str(err.get("msg", "")) for err in errors)
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": msg, "errors": jsonable_encoder(errors)}
+    )
 
 # Mount authentication router under /api/auth
 app.include_router(auth_router, prefix="/api/auth", tags=["Authentication"])
@@ -40,13 +54,15 @@ app.add_middleware(
 
 @app.get("/api/health", status_code=status.HTTP_200_OK)
 def health_check() -> Dict[str, Any]:
-    """Health check endpoint confirming API status and active policy reference."""
+    """Health check endpoint confirming API status and all supported districts."""
+    supported = list_supported_districts()
     return {
         "status": "ok",
         "version": "1.0.0",
         "active_policy": RajarshiShahuPolicyEngine.SCHEME_NAME,
         "active_district": "Dhule",
-        "supported_districts": ["Dhule"],
+        "supported_districts": supported,
+        "total_supported_districts": len(supported),
         "default_mode": "Offline Deterministic Stub (Zero-cost safe)"
     }
 

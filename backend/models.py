@@ -3,8 +3,44 @@ Backend API Models: Pydantic schemas for the Maharashtra Policy Simulator.
 Enforces the explicit Phase A data contract between Python simulation and React frontend.
 """
 
+import math
 from typing import Dict, List, Any, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+
+class CounterfactualPolicyParams(BaseModel):
+    """Configurable parameters for counterfactual 'what-if' policy scenarios."""
+    max_income_limit: Optional[float] = Field(default=800000.0, ge=0.0, description="Annual family income ceiling in INR")
+    income_slab_lower: Optional[float] = Field(default=250000.0, ge=0.0, description="Lower income slab for 100% male govt/aided concession")
+    min_attendance_percent: Optional[float] = Field(default=50.0, ge=0.0, le=100.0, description="Statutory minimum attendance percentage")
+    institutional_attendance_threshold: Optional[float] = Field(default=75.0, ge=0.0, le=100.0, description="Institutional term-end attendance threshold")
+    enable_female_100_percent_rule: Optional[bool] = Field(default=True, description="Enable 100% waiver for female students")
+    female_tuition_rate: Optional[float] = Field(default=1.00, ge=0.0, le=1.0, description="Female tuition reimbursement rate")
+    female_exam_rate: Optional[float] = Field(default=1.00, ge=0.0, le=1.0, description="Female exam reimbursement rate")
+    male_tier1_govt_tuition_rate: Optional[float] = Field(default=1.00, ge=0.0, le=1.0, description="Male tier-1 govt tuition rate")
+    male_tier1_pvt_tuition_rate: Optional[float] = Field(default=0.50, ge=0.0, le=1.0, description="Male tier-1 private unaided tuition rate")
+    male_tier2_tuition_rate: Optional[float] = Field(default=0.50, ge=0.0, le=1.0, description="Male tier-2 tuition rate")
+    male_exam_rate: Optional[float] = Field(default=0.50, ge=0.0, le=1.0, description="Male exam reimbursement rate")
+    policy_label: Optional[str] = Field(default="Counterfactual Scenario", description="Scenario descriptive label")
+
+    @field_validator(
+        "max_income_limit", "income_slab_lower", "min_attendance_percent",
+        "institutional_attendance_threshold", "female_tuition_rate",
+        "female_exam_rate", "male_tier1_govt_tuition_rate",
+        "male_tier1_pvt_tuition_rate", "male_tier2_tuition_rate",
+        "male_exam_rate",
+        mode="before"
+    )
+    @classmethod
+    def reject_bool_and_non_finite_params(cls, v: Any, info) -> Any:
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            raise ValueError(f"{info.field_name} cannot be a boolean value.")
+        if isinstance(v, (int, float)):
+            if math.isnan(v) or math.isinf(v):
+                raise ValueError(f"{info.field_name} must be a finite number.")
+        return v
 
 
 class SimulationRequest(BaseModel):
@@ -18,6 +54,69 @@ class SimulationRequest(BaseModel):
     seed: int = Field(default=42, description="Random seed for deterministic reproducibility")
     use_gemini: bool = Field(default=False, description="Whether to invoke live Gemini API (defaults to offline stub)")
     gemini_model: str = Field(default="gemini-3.1-flash-lite", description="Gemini model identifier when use_gemini is True")
+    policy_mode: Optional[str] = Field(default="legacy_poc", description="Policy evaluation mode: 'legacy_poc', 'statutory', 'override', or 'counterfactual'")
+    override_reimbursement_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Uniform override reimbursement rate (required when policy_mode='override')")
+    assumed_reimbursement_rate: Optional[float] = Field(default=None, ge=0.0, le=1.0, description="Alternative/legacy parameter for override_reimbursement_rate")
+    counterfactual_params: Optional[CounterfactualPolicyParams] = Field(default=None, description="Configurable policy parameters for 'counterfactual' mode")
+    counterfactual_config: Optional[Dict[str, Any]] = Field(default=None, description="Alternative dictionary payload for counterfactual policy parameters")
+
+    @field_validator("district")
+    @classmethod
+    def validate_district_format(cls, v: Any) -> str:
+        if v is None:
+            return "Dhule"
+        if not isinstance(v, str) or not v.strip():
+            raise ValueError("District name must be a non-empty string.")
+        return v.strip()
+
+    @field_validator("override_reimbursement_rate", "assumed_reimbursement_rate", mode="before")
+    @classmethod
+    def reject_bool_override_rate(cls, v: Any, info) -> Any:
+        if v is None:
+            return v
+        if isinstance(v, bool):
+            raise ValueError(f"{info.field_name} cannot be a boolean value.")
+        if isinstance(v, (int, float)):
+            if math.isnan(v) or math.isinf(v):
+                raise ValueError(f"{info.field_name} must be a finite number.")
+        return v
+
+    @model_validator(mode="after")
+    def validate_policy_mode_inputs(self) -> "SimulationRequest":
+        pm = (self.policy_mode or "legacy_poc").strip().lower()
+        if pm in ("override",):
+            eff_rate = self.override_reimbursement_rate if self.override_reimbursement_rate is not None else self.assumed_reimbursement_rate
+            if eff_rate is None:
+                raise ValueError("override_reimbursement_rate must be provided when policy_mode is 'override'")
+        elif pm in ("statutory", "statutory_dte"):
+            if self.override_reimbursement_rate is not None or self.assumed_reimbursement_rate is not None:
+                raise ValueError("override_reimbursement_rate cannot be specified in 'statutory' mode")
+        elif pm in ("counterfactual",):
+            if self.override_reimbursement_rate is not None or self.assumed_reimbursement_rate is not None:
+                raise ValueError("override_reimbursement_rate cannot be specified in 'counterfactual' mode")
+        return self
+
+    @model_validator(mode="after")
+    def validate_counterfactual_inputs(self) -> "SimulationRequest":
+        if self.counterfactual_params is not None and self.counterfactual_config is not None:
+            raise ValueError(
+                "Cannot supply both 'counterfactual_params' and 'counterfactual_config'. Please provide only one."
+            )
+        if self.counterfactual_config is not None:
+            from simulation.engine import _build_counterfactual_config
+            _build_counterfactual_config(self.counterfactual_config)
+        return self
+
+    @model_validator(mode="after")
+    def validate_reimbursement_rate_inputs(self) -> "SimulationRequest":
+        if self.override_reimbursement_rate is not None and self.assumed_reimbursement_rate is not None:
+            if self.override_reimbursement_rate != self.assumed_reimbursement_rate:
+                raise ValueError(
+                    f"Conflicting reimbursement rates supplied: 'override_reimbursement_rate' ({self.override_reimbursement_rate}) "
+                    f"and 'assumed_reimbursement_rate' ({self.assumed_reimbursement_rate}) cannot differ. "
+                    f"Please provide matching values or specify only one."
+                )
+        return self
 
 
 class SimulationMetadata(BaseModel):
@@ -30,8 +129,12 @@ class SimulationMetadata(BaseModel):
     seed: int
     llm_provider: str
     is_synthetic_poc: bool
-    assumed_reimbursement_rate: float
+    assumed_reimbursement_rate: Optional[float] = None
     data_disclaimer: str
+    policy_mode: str = "legacy_poc"
+    policy_version: str = "2024.1-provisional"
+    is_provisional: bool = True
+    provisional_notes: List[str] = Field(default_factory=list)
 
 
 class ProvenanceBreakdown(BaseModel):
@@ -56,6 +159,15 @@ class AggregateMetrics(BaseModel):
     realized_uptake_rate: float
     total_estimated_fee_relief_inr: float
     average_fee_relief_per_eligible_inr: float
+    total_tuition_fee_relief_inr: float = 0.0
+    total_exam_fee_relief_inr: float = 0.0
+    total_net_payable_tuition_fee_inr: float = 0.0
+    total_net_payable_exam_fee_inr: float = 0.0
+    total_net_payable_fee_inr: float = 0.0
+    policy_mode: str = "legacy_poc"
+    policy_version: str = "2024.1-provisional"
+    is_provisional: bool = True
+    provisional_notes: List[str] = Field(default_factory=list)
 
 
 class StepMetric(BaseModel):
@@ -115,6 +227,15 @@ class PersonaOutput(BaseModel):
     is_statutorily_eligible: bool
     estimated_fee_relief_inr: float
     statutory_failure_reasons: List[str]
+    annual_exam_fee: float = 0.0
+    tuition_fee_relief_inr: float = 0.0
+    exam_fee_relief_inr: float = 0.0
+    net_payable_tuition_fee: float = 0.0
+    net_payable_exam_fee: float = 0.0
+    total_net_payable_fee: float = 0.0
+    policy_version: str = "2024.1-provisional"
+    is_provisional: bool = True
+    provisional_notes: List[str] = Field(default_factory=list)
 
     # Behavioral & Probabilistic Metrics
     initial_awareness: float
