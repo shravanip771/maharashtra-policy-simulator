@@ -378,14 +378,29 @@ class SyntheticPersonaGenerator:
         trust_m, trust_s = priors.get("institutional_trust", (0.50, 0.18))
 
         # Adjust priors conditionally to reflect realistic simulation nuances
-        # (e.g., lower income -> higher financial urgency; first gen -> slightly lower initial awareness)
-        if family_income <= 200000.0:
-            urgency_m = min(1.0, urgency_m + 0.15)
+        if family_income <= 150000.0:
+            urgency_m = min(1.0, urgency_m + 0.18)
+            doc_m = max(0.05, doc_m - 0.05)
+        elif family_income >= 600000.0:
+            urgency_m = max(0.10, urgency_m - 0.20)
+            digital_m = min(0.95, digital_m + 0.08)
+
         if first_gen:
-            doc_m = max(0.0, doc_m - 0.10)
-            awareness_m = max(0.0, awareness_m - 0.10)
+            doc_m = max(0.05, doc_m - 0.10)
+            awareness_m = max(0.05, awareness_m - 0.10)
+        elif parental_edu in ["Graduate", "Higher Secondary"]:
+            doc_m = min(0.95, doc_m + 0.08)
+            awareness_m = min(0.95, awareness_m + 0.08)
+
         if region_type == "Rural":
-            digital_m = max(0.0, digital_m - 0.10)
+            digital_m = max(0.05, digital_m - 0.10)
+            doc_m = max(0.05, doc_m - 0.06)
+        elif region_type == "Urban":
+            digital_m = min(0.95, digital_m + 0.08)
+            awareness_m = min(0.95, awareness_m + 0.05)
+
+        if institution_type in [InstitutionType.GOVERNMENT, InstitutionType.GOVERNMENT_AIDED]:
+            trust_m = min(0.95, trust_m + 0.06)
 
         initial_awareness = round(sample_norm(awareness_m, awareness_s, 0.05, 0.95), 2)
         digital_literacy = round(sample_norm(digital_m, digital_s, 0.05, 0.95), 2)
@@ -522,13 +537,18 @@ class SyntheticPersonaGenerator:
         cls,
         total_count: int = 1000,
         districts: Optional[List[str]] = None,
+        district_quotas: Optional[Dict[str, int]] = None,
         seed: Optional[int] = 42
     ) -> List[StudentPersona]:
         """
         Generates a state-wide population of N student personas distributed across
-        Maharashtra districts (defaulting to the 36 configured districts).
+        Maharashtra districts. If district_quotas is supplied, follows that allocation.
+        Otherwise balances total_count evenly across target_districts (defaulting to 36 districts).
         Guarantees exact total count, deterministic reproducibility, and unique IDs.
         """
+        if district_quotas is not None:
+            return cls.generate_multidistrict_population(district_quotas=district_quotas, seed=seed)
+
         from simulation.district_config import list_supported_districts
         target_districts = districts or list_supported_districts()
         if not target_districts:
@@ -538,12 +558,27 @@ class SyntheticPersonaGenerator:
         base_quota = total_count // len(target_districts)
         remainder = total_count % len(target_districts)
 
-        district_quotas: Dict[str, int] = {}
+        calculated_quotas: Dict[str, int] = {}
         for idx, dist in enumerate(target_districts):
             count = base_quota + (1 if idx < remainder else 0)
             if count > 0:
-                district_quotas[dist] = count
+                calculated_quotas[dist] = count
 
-        return cls.generate_multidistrict_population(district_quotas=district_quotas, seed=seed)
+        return cls.generate_multidistrict_population(district_quotas=calculated_quotas, seed=seed)
+
+    @classmethod
+    def generate_weighted_state_population(
+        cls,
+        district_quotas: Optional[Dict[str, int]] = None,
+        seed: Optional[int] = 42
+    ) -> List[StudentPersona]:
+        """
+        Generates a 1,000-student statewide cohort across all 36 Maharashtra districts
+        weighted by Census 2011 population proportions (or caller-supplied quotas).
+        Guarantees exactly 1,000 personas, deterministic reproducibility, and unique IDs.
+        """
+        from simulation.district_config import STATEWIDE_POPULATION_ALLOCATION_36
+        quotas = district_quotas or STATEWIDE_POPULATION_ALLOCATION_36
+        return cls.generate_multidistrict_population(district_quotas=quotas, seed=seed)
 
 
