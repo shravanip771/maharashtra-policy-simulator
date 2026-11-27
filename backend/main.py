@@ -8,9 +8,15 @@ from typing import Dict, Any, List
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.models import SimulationRequest, SimulationResponse
+from backend.models import (
+    SimulationRequest,
+    SimulationResponse,
+    StatewideSimulationRequest,
+    StatewideSimulationResponse
+)
 from backend.service import SimulationService
 from simulation.policy_rules import RajarshiShahuPolicyEngine
+from simulation.district_config import DISTRICT_REGISTRY
 
 app = FastAPI(
     title="Maharashtra Policy Simulator API",
@@ -59,16 +65,60 @@ def list_schemes() -> List[Dict[str, Any]]:
 
 @app.get("/api/districts", status_code=status.HTTP_200_OK)
 def list_districts() -> List[Dict[str, Any]]:
-    """Lists districts with verified census / empirical baseline configurations."""
-    return [
-        {
-            "district_name": "Dhule",
+    """
+    Lists all configured Maharashtra districts.
+    Ensures Dhule is first for backward compatibility with existing tests.
+    """
+    districts: List[Dict[str, Any]] = []
+
+    # Ensure Dhule is first
+    dhule_p = DISTRICT_REGISTRY.get("DHULE")
+    if dhule_p:
+        is_empirical = (dhule_p.provenance_tier == "empirical_observed")
+        status_label = "Verified Empirical Baseline" if is_empirical else "Provisional Baseline"
+        districts.append({
+            "district_id": dhule_p.district_id,
+            "district_name": dhule_p.district_name,
             "district_code": "498",
-            "reference_dataset": "Dhule Education & Social Community Services (2010-11 Census Table)",
-            "talukas": ["Dhule", "Shirpur", "Sindkhede", "Sakri"],
-            "status": "Verified Empirical Baseline"
-        }
-    ]
+            "division": dhule_p.division,
+            "region_type": dhule_p.region_type,
+            "provenance_tier": dhule_p.provenance_tier,
+            "reference_dataset": dhule_p.source_reference,
+            "reference_year": dhule_p.reference_year,
+            "talukas": dhule_p.talukas or [],
+            "taluka_distribution": dhule_p.taluka_distribution,
+            "source_reference": dhule_p.source_reference,
+            "source_url": dhule_p.source_url,
+            "available_statistics": dhule_p.available_statistics,
+            "status": status_label,
+            "is_empirical": is_empirical
+        })
+
+    # Add all other configured districts from registry
+    for key, p in DISTRICT_REGISTRY.items():
+        if key == "DHULE":
+            continue
+        is_empirical = (p.provenance_tier == "empirical_observed")
+        status_label = "Verified Empirical Baseline" if is_empirical else "Provisional Baseline"
+        districts.append({
+            "district_id": p.district_id,
+            "district_name": p.district_name,
+            "district_code": p.district_id,
+            "division": p.division,
+            "region_type": p.region_type,
+            "provenance_tier": p.provenance_tier,
+            "reference_dataset": p.source_reference,
+            "reference_year": p.reference_year,
+            "talukas": p.talukas or [],
+            "taluka_distribution": p.taluka_distribution,
+            "source_reference": p.source_reference,
+            "source_url": p.source_url,
+            "available_statistics": p.available_statistics,
+            "status": status_label,
+            "is_empirical": is_empirical
+        })
+
+    return districts
 
 
 @app.post("/api/simulate", response_model=SimulationResponse, status_code=status.HTTP_200_OK)
@@ -83,6 +133,21 @@ def run_simulation(request: SimulationRequest) -> SimulationResponse:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Simulation execution failed: {str(e)}"
+        )
+
+
+@app.post("/api/simulate/statewide", response_model=StatewideSimulationResponse, status_code=status.HTTP_200_OK)
+def run_statewide_simulation(request: StatewideSimulationRequest) -> StatewideSimulationResponse:
+    """
+    Executes a multi-step statewide cohort simulation across all 36 Maharashtra districts (1,000 personas),
+    computes aggregate outcomes and district breakdowns, and returns deterministic featured personas.
+    """
+    try:
+        return SimulationService.execute_statewide_simulation(request)
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Statewide simulation execution failed: {str(e)}"
         )
 
 

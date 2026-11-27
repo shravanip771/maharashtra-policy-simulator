@@ -36,11 +36,29 @@ export default function PersonaTable({ personas, onSelectPersona }) {
     }
   };
 
+  const formatLocation = (district, taluka) => {
+    const rawD = (district || '').trim();
+    const rawT = (taluka || '').trim();
+
+    const d = rawD && rawD.toLowerCase() !== 'undefined' && rawD.toLowerCase() !== 'null' ? rawD : '';
+    const t = rawT && rawT.toLowerCase() !== 'undefined' && rawT.toLowerCase() !== 'null' ? rawT : '';
+
+    if (d && t) {
+      if (d.toLowerCase() === t.toLowerCase()) {
+        return d.toLowerCase().endsWith('district') ? d : `${d} District · ${t}`;
+      }
+      return `${d} · ${t}`;
+    }
+    if (d) return d;
+    if (t) return `Taluka: ${t}`;
+    return null;
+  };
+
   return (
     <section className="section">
       <h2 className="section-title">Personas</h2>
       <p className="section-subtitle">
-        Each persona represents one synthetic student agent. Click any row to view AI reasoning.
+        Each persona represents one synthetic student agent.
       </p>
 
       <div className="table-wrapper">
@@ -63,6 +81,7 @@ export default function PersonaTable({ personas, onSelectPersona }) {
               const awareness = Number(p.final_awareness ?? p.awareness ?? 0);
               const state = p.final_state || p.current_state || 'UNAWARE';
               const outcomeText = formatOutcome(state, isEligible);
+              const locationText = formatLocation(p.district, p.taluka);
 
               return (
                 <tr key={personaId} onClick={() => onSelectPersona(p)}>
@@ -71,6 +90,11 @@ export default function PersonaTable({ personas, onSelectPersona }) {
                     <span style={{ color: 'var(--text-muted)', fontSize: '11px' }}>
                       ({personaId})
                     </span>
+                    {locationText && (
+                      <div style={{ fontSize: '11px', color: 'var(--text-secondary)', marginTop: '2px' }}>
+                        {locationText}
+                      </div>
+                    )}
                   </td>
                   <td>{course}</td>
                   <td>

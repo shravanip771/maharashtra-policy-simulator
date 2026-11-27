@@ -132,9 +132,34 @@ def test_api_no_secrets_exposed():
     print("PASS: test_api_no_secrets_exposed")
 
 
+def test_api_statewide_simulation():
+    """Verifies that POST /api/simulate/statewide runs a 1,000-persona statewide simulation."""
+    payload = {
+        "district": "STATEWIDE",
+        "simulation_steps": 1,
+        "seed": 42,
+        "use_gemini": False
+    }
+    response = client.post("/api/simulate/statewide", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+
+    assert data["is_statewide"] is True
+    assert data["aggregate_metrics"]["total_personas"] == 1000
+    assert len(data["district_summaries"]) == 36
+    assert "Dhule" in data["district_summaries"]
+    assert "Pune" in data["district_summaries"]
+    assert "Mumbai City" in data["district_summaries"]
+    assert len(data["personas"]) == 10
+    assert len(data["featured_personas"]) == 10
+    assert len(data["interactions"]) > 0
+    print("PASS: test_api_statewide_simulation")
+
+
 if __name__ == "__main__":
     test_api_health_endpoint()
     test_api_schemes_and_districts_endpoints()
     test_api_simulate_contract_and_reconciliation()
     test_api_no_secrets_exposed()
+    test_api_statewide_simulation()
     print("All backend API tests passed successfully!")

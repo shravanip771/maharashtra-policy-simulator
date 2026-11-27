@@ -1,10 +1,131 @@
-from dataclasses import dataclass, asdict, field
-from typing import Dict, List, Any, Optional
+from dataclasses import dataclass, asdict, field, is_dataclass
+from typing import Dict, List, Any, Optional, Tuple
+from enum import Enum
 import json
+import math
 
 from simulation.persona import StudentPersona, SimulationState
-from simulation.policy_rules import RajarshiShahuPolicyEngine, PolicyEvaluationResult
+from simulation.policy_rules import RajarshiShahuPolicyEngine, PolicyEvaluationResult, DTEPolicyConfig
 from simulation.agent import PersonaAgent, PersonaCalculatedMetrics, PersonaReasoningOutput, BaseLLMProvider
+
+
+def _safe_serialize(val: Any) -> Any:
+    """Recursively serializes enums to string values and dataclasses to dicts for clean JSON."""
+    if isinstance(val, Enum):
+        return val.value
+    if is_dataclass(val) and not isinstance(val, type):
+        return {k: _safe_serialize(v) for k, v in asdict(val).items()}
+    if isinstance(val, (list, tuple)):
+        return [_safe_serialize(x) for x in val]
+    if isinstance(val, dict):
+        return {k: _safe_serialize(v) for k, v in val.items()}
+    return val
+
+
+def _has_modified_benefit_rates(config: DTEPolicyConfig) -> bool:
+    """Checks whether any benefit rate schedule in DTEPolicyConfig deviates from statutory baseline."""
+    default_cfg = RajarshiShahuPolicyEngine.DEFAULT_CONFIG
+    return (
+        config.female_tuition_rate != default_cfg.female_tuition_rate
+        or config.female_exam_rate != default_cfg.female_exam_rate
+        or config.orphan_tuition_rate != default_cfg.orphan_tuition_rate
+        or config.orphan_exam_rate != default_cfg.orphan_exam_rate
+        or config.male_tier1_govt_tuition_rate != default_cfg.male_tier1_govt_tuition_rate
+        or config.male_tier1_pvt_tuition_rate != default_cfg.male_tier1_pvt_tuition_rate
+        or config.male_tier2_tuition_rate != default_cfg.male_tier2_tuition_rate
+        or config.male_exam_rate != default_cfg.male_exam_rate
+        or config.enable_female_100_percent_rule != default_cfg.enable_female_100_percent_rule
+        or config.enable_orphan_100_percent_rule != default_cfg.enable_orphan_100_percent_rule
+    )
+
+
+def resolve_policy_parameters(
+    interface_name: str,
+    policy_mode: Optional[str] = None,
+    assumed_reimbursement_rate: Optional[Any] = None,
+    policy_config: Optional[Any] = None
+) -> Tuple[str, Optional[float], DTEPolicyConfig, bool]:
+    """
+    Deterministically resolves and validates policy mode, rate, and configuration parameters.
+    Guarantees backward compatibility for existing callers while preventing invalid combinations.
+    """
+    # 1. Type validation for policy_config
+    if policy_config is not None and not isinstance(policy_config, DTEPolicyConfig):
+        raise TypeError(f"policy_config must be an instance of DTEPolicyConfig, got {type(policy_config).__name__}.")
+
+    active_config = policy_config or RajarshiShahuPolicyEngine.DEFAULT_CONFIG
+
+    # 2. Type validation for policy_mode
+    if policy_mode is not None:
+        if not isinstance(policy_mode, str):
+            raise TypeError(f"policy_mode must be a string, got {type(policy_mode).__name__}.")
+        if policy_mode not in {"legacy_poc", "statutory", "override", "counterfactual"}:
+            raise ValueError(f"Invalid policy_mode '{policy_mode}'. Supported modes: 'legacy_poc', 'statutory', 'override', 'counterfactual'.")
+
+    # 3. Mode Resolution
+    if policy_mode is not None:
+        resolved_mode = policy_mode
+    elif assumed_reimbursement_rate is not None:
+        if interface_name in {"run_cohort", "run_multistep_cohort"} and not isinstance(assumed_reimbursement_rate, bool) and isinstance(assumed_reimbursement_rate, (int, float)) and float(assumed_reimbursement_rate) == 0.50:
+            # Existing cohort callers passing assumed_reimbursement_rate=0.50 retain historical legacy_poc behavior
+            resolved_mode = "legacy_poc"
+        else:
+            resolved_mode = "override"
+    else:
+        # Both policy_mode and assumed_reimbursement_rate omitted:
+        if interface_name == "run_step":
+            # Historical run_step evaluated statutory rules when rate was None
+            if _has_modified_benefit_rates(active_config):
+                resolved_mode = "counterfactual"
+            else:
+                resolved_mode = "statutory"
+        else:
+            # Historical run_cohort / run_multistep_cohort evaluated 50% legacy PoC
+            resolved_mode = "legacy_poc"
+
+    # 4. Mode-specific constraints and rate validation
+    is_counterfactual = False
+
+    if resolved_mode == "statutory":
+        if assumed_reimbursement_rate is not None:
+            raise ValueError("Explicit assumed_reimbursement_rate cannot be provided when policy_mode='statutory'.")
+        if _has_modified_benefit_rates(active_config):
+            raise ValueError("Cannot modify statutory benefit rates in policy_mode='statutory'. Use policy_mode='counterfactual'.")
+        resolved_rate = None
+
+    elif resolved_mode == "counterfactual":
+        if assumed_reimbursement_rate is not None:
+            raise ValueError("assumed_reimbursement_rate cannot be specified when policy_mode='counterfactual'. Use policy_mode='override'.")
+        resolved_rate = None
+        is_counterfactual = True
+
+    elif resolved_mode == "override":
+        if assumed_reimbursement_rate is None:
+            raise ValueError("policy_mode='override' requires an explicit assumed_reimbursement_rate in [0.0, 1.0].")
+        if isinstance(assumed_reimbursement_rate, bool):
+            raise ValueError("assumed_reimbursement_rate cannot be a boolean.")
+        if not isinstance(assumed_reimbursement_rate, (int, float)):
+            raise ValueError(f"assumed_reimbursement_rate must be numeric, got {type(assumed_reimbursement_rate).__name__}.")
+        if math.isnan(assumed_reimbursement_rate) or math.isinf(assumed_reimbursement_rate):
+            raise ValueError(f"assumed_reimbursement_rate is non-finite ({assumed_reimbursement_rate}).")
+        if assumed_reimbursement_rate < 0.0 or assumed_reimbursement_rate > 1.0:
+            raise ValueError(f"assumed_reimbursement_rate ({assumed_reimbursement_rate}) is outside the valid range [0.0, 1.0].")
+        resolved_rate = float(assumed_reimbursement_rate)
+        is_counterfactual = False
+
+    elif resolved_mode == "legacy_poc":
+        if assumed_reimbursement_rate is not None:
+            if isinstance(assumed_reimbursement_rate, bool):
+                raise ValueError("assumed_reimbursement_rate cannot be a boolean.")
+            if not isinstance(assumed_reimbursement_rate, (int, float)):
+                raise ValueError(f"assumed_reimbursement_rate must be numeric, got {type(assumed_reimbursement_rate).__name__}.")
+            if float(assumed_reimbursement_rate) != 0.50:
+                raise ValueError(f"policy_mode='legacy_poc' requires assumed_reimbursement_rate=0.50 or None, got {assumed_reimbursement_rate}.")
+        resolved_rate = 0.50
+        is_counterfactual = False
+
+    return resolved_mode, resolved_rate, active_config, is_counterfactual
+
 
 @dataclass
 class SimulationStepOutput:
@@ -43,11 +164,19 @@ class SimulationStepOutput:
     chosen_action: str
     confidence_level: str
 
+    # Stage 2.4 Granular Fee Breakdown & Policy Traceability
+    tuition_fee_relief_inr: float = 0.0
+    exam_fee_relief_inr: float = 0.0
+    policy_mode: str = "statutory"
+    is_counterfactual: bool = False
+    policy_result: Optional[PolicyEvaluationResult] = None
+
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return _safe_serialize(self)
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, default=str)
+
 
 @dataclass
 class CohortSimulationResult:
@@ -88,8 +217,15 @@ class CohortSimulationResult:
     individual_results: List[SimulationStepOutput]
     assumptions_and_limitations: List[str] = field(default_factory=list)
 
+    # Policy mode and fee breakdown metrics
+    policy_mode: str = "legacy_poc"
+    total_tuition_fee_relief_inr: float = 0.0
+    total_exam_fee_relief_inr: float = 0.0
+    is_counterfactual: bool = False
+    cohort_effective_relief_rate: float = 0.0
+
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return _safe_serialize(self)
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, default=str)
@@ -107,17 +243,48 @@ class SimulationEngine:
         self,
         persona: StudentPersona,
         step_index: int = 1,
-        assumed_reimbursement_rate: Optional[float] = None
+        assumed_reimbursement_rate: Optional[float] = None,
+        policy_mode: Optional[str] = None,
+        policy_config: Optional[DTEPolicyConfig] = None
     ) -> SimulationStepOutput:
         """
         Executes a complete single-persona simulation cycle for the Rajarshi Shahu scheme.
         """
+        resolved_mode, resolved_rate, active_config, is_counterfactual = resolve_policy_parameters(
+            interface_name="run_step",
+            policy_mode=policy_mode,
+            assumed_reimbursement_rate=assumed_reimbursement_rate,
+            policy_config=policy_config
+        )
+
         agent = PersonaAgent(persona=persona, llm_provider=self.llm_provider)
 
         # 1. OBSERVE: Deterministic Policy Evaluation & Environment Perception
         policy_eval: PolicyEvaluationResult = RajarshiShahuPolicyEngine.evaluate_eligibility(
-            persona, assumed_reimbursement_rate=assumed_reimbursement_rate
+            persona,
+            assumed_reimbursement_rate=resolved_rate,
+            config=active_config
         )
+
+        # Handle legacy_poc mode special clamping (strictly tuition-only 50% relief, 0% exam fee relief)
+        if resolved_mode == "legacy_poc":
+            if policy_eval.is_eligible:
+                tuition_val = float(getattr(persona, "annual_tuition_fee", 0.0) or 0.0)
+                tuition_relief = round(min(tuition_val, max(0.0, tuition_val * 0.50)), 2)
+                exam_relief = 0.0
+                total_relief = tuition_relief
+                eff_rate = 0.50
+            else:
+                tuition_relief = 0.0
+                exam_relief = 0.0
+                total_relief = 0.0
+                eff_rate = 0.0
+        else:
+            tuition_relief = policy_eval.tuition_fee_relief_inr
+            exam_relief = policy_eval.exam_fee_relief_inr
+            total_relief = policy_eval.estimated_fee_relief_inr
+            eff_rate = policy_eval.reimbursement_percentage
+
         metrics: PersonaCalculatedMetrics = agent.compute_baseline_metrics(policy_eval)
 
         persona.record_memory(
@@ -125,7 +292,7 @@ class SimulationEngine:
             event_type="OBSERVE_POLICY",
             details={
                 "is_eligible": policy_eval.is_eligible,
-                "fee_relief": policy_eval.estimated_fee_relief_inr,
+                "fee_relief": total_relief,
                 "failures": policy_eval.failure_reasons
             }
         )
@@ -181,8 +348,8 @@ class SimulationEngine:
             },
             scheme_name=policy_eval.scheme_name,
             is_eligible=policy_eval.is_eligible,
-            reimbursement_percentage=policy_eval.reimbursement_percentage,
-            estimated_fee_relief_inr=policy_eval.estimated_fee_relief_inr,
+            reimbursement_percentage=eff_rate,
+            estimated_fee_relief_inr=total_relief,
             statutory_failure_reasons=policy_eval.failure_reasons,
             statutory_notes=policy_eval.statutory_notes,
             benefit_assumptions=policy_eval.benefit_assumptions,
@@ -199,7 +366,12 @@ class SimulationEngine:
             stated_intention=reasoning.stated_intention,
             perceived_barriers=reasoning.perceived_barriers,
             chosen_action=reasoning.chosen_action,
-            confidence_level=reasoning.confidence_level
+            confidence_level=reasoning.confidence_level,
+            tuition_fee_relief_inr=tuition_relief,
+            exam_fee_relief_inr=exam_relief,
+            policy_mode=resolved_mode,
+            is_counterfactual=is_counterfactual,
+            policy_result=policy_eval
         )
 
     def run_cohort(
@@ -207,125 +379,40 @@ class SimulationEngine:
         personas: List[StudentPersona],
         cohort_name: str = "Dhule-10-Persona-Cohort",
         seed: Optional[int] = None,
-        assumed_reimbursement_rate: Optional[float] = None
+        assumed_reimbursement_rate: Optional[float] = None,
+        policy_mode: Optional[str] = None,
+        policy_config: Optional[DTEPolicyConfig] = None
     ) -> CohortSimulationResult:
         """
         Executes individual simulations for each persona in a cohort and calculates
         comprehensive aggregate statistics, breakdowns, and barrier distributions.
         """
-        individual_results: List[SimulationStepOutput] = []
-        effective_rate = (
-            assumed_reimbursement_rate
-            if assumed_reimbursement_rate is not None
-            else RajarshiShahuPolicyEngine.DEFAULT_POC_ASSUMED_REIMBURSEMENT_RATE
+        resolved_mode, resolved_rate, active_config, is_counterfactual = resolve_policy_parameters(
+            interface_name="run_cohort",
+            policy_mode=policy_mode,
+            assumed_reimbursement_rate=assumed_reimbursement_rate,
+            policy_config=policy_config
         )
+
+        individual_results: List[SimulationStepOutput] = []
 
         for p in personas:
             step_out = self.run_step(
                 persona=p,
                 step_index=1,
-                assumed_reimbursement_rate=effective_rate
+                assumed_reimbursement_rate=resolved_rate,
+                policy_mode=resolved_mode,
+                policy_config=active_config
             )
             individual_results.append(step_out)
 
-        total = len(individual_results)
-        eligible_count = sum(1 for r in individual_results if r.is_eligible)
-        ineligible_count = total - eligible_count
-        eligibility_rate = round(eligible_count / total, 4) if total > 0 else 0.0
-
-        total_relief = sum(r.estimated_fee_relief_inr for r in individual_results)
-        avg_relief_eligible = round(total_relief / eligible_count, 2) if eligible_count > 0 else 0.0
-
-        # Behavioral & Probabilistic Averages
-        avg_awareness = round(sum(r.awareness_score for r in individual_results) / total, 4) if total > 0 else 0.0
-        avg_benefit = round(sum(r.perceived_benefit_score for r in individual_results) / total, 4) if total > 0 else 0.0
-        avg_app_prob = round(sum(r.application_probability for r in individual_results) / total, 4) if total > 0 else 0.0
-        avg_comp_prob = round(sum(r.completion_probability for r in individual_results) / total, 4) if total > 0 else 0.0
-        avg_uptake_prob = round(sum(r.expected_uptake_probability for r in individual_results) / total, 4) if total > 0 else 0.0
-
-        # Realized actions
-        attempted_count = sum(1 for r in individual_results if r.attempted_application)
-        completed_count = sum(1 for r in individual_results if r.completed_application)
-        benefit_count = sum(1 for r in individual_results if r.benefit_received)
-        uptake_rate = round(benefit_count / total, 4) if total > 0 else 0.0
-
-        # Breakdowns helper
-        def compute_breakdown(key: str) -> Dict[str, Dict[str, Any]]:
-            breakdown: Dict[str, Dict[str, Any]] = {}
-            for r in individual_results:
-                group_val = r.demographics_summary.get(key, "Unknown")
-                if group_val not in breakdown:
-                    breakdown[group_val] = {
-                        "total_count": 0,
-                        "eligible_count": 0,
-                        "ineligible_count": 0,
-                        "benefit_received_count": 0,
-                        "total_relief_inr": 0.0
-                    }
-                breakdown[group_val]["total_count"] += 1
-                if r.is_eligible:
-                    breakdown[group_val]["eligible_count"] += 1
-                else:
-                    breakdown[group_val]["ineligible_count"] += 1
-                if r.benefit_received:
-                    breakdown[group_val]["benefit_received_count"] += 1
-                breakdown[group_val]["total_relief_inr"] += r.estimated_fee_relief_inr
-
-            # Calculate rates
-            for g, data in breakdown.items():
-                tot_g = data["total_count"]
-                data["eligibility_rate"] = round(data["eligible_count"] / tot_g, 4) if tot_g > 0 else 0.0
-                data["uptake_rate"] = round(data["benefit_received_count"] / tot_g, 4) if tot_g > 0 else 0.0
-
-            return breakdown
-
-        gender_breakdown = compute_breakdown("gender")
-        inst_breakdown = compute_breakdown("institution_type")
-        caste_breakdown = compute_breakdown("caste_category")
-
-        # Statutory ineligibility failure reasons summary
-        ineligibility_reasons: Dict[str, int] = {}
-        for r in individual_results:
-            for reason in r.statutory_failure_reasons:
-                ineligibility_reasons[reason] = ineligibility_reasons.get(reason, 0) + 1
-
-        # Simulation state distribution
-        state_distribution: Dict[str, int] = {}
-        for r in individual_results:
-            state_distribution[r.final_simulation_state] = state_distribution.get(r.final_simulation_state, 0) + 1
-
-        assumptions = [
-            f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 75%).",
-            f"Assumed fee reimbursement rate: {effective_rate * 100:.0f}%. Note: actual departmental rules vary.",
-            f"Demographic fields grounded in Dhule 2010-11 education data; income/caste/behavioral parameters use baseline priors."
-        ]
-
-        return CohortSimulationResult(
-            cohort_name=cohort_name,
-            total_personas=total,
-            seed=seed,
-            assumed_reimbursement_rate=effective_rate,
-            eligible_count=eligible_count,
-            ineligible_count=ineligible_count,
-            eligibility_rate=eligibility_rate,
-            total_estimated_fee_relief_inr=total_relief,
-            average_fee_relief_per_eligible_inr=avg_relief_eligible,
-            average_awareness_score=avg_awareness,
-            average_perceived_benefit_score=avg_benefit,
-            average_application_probability=avg_app_prob,
-            average_completion_probability=avg_comp_prob,
-            average_expected_uptake_probability=avg_uptake_prob,
-            attempted_application_count=attempted_count,
-            completed_application_count=completed_count,
-            benefit_received_count=benefit_count,
-            uptake_rate=uptake_rate,
-            breakdown_by_gender=gender_breakdown,
-            breakdown_by_institution_type=inst_breakdown,
-            breakdown_by_caste_category=caste_breakdown,
-            ineligibility_reasons_summary=ineligibility_reasons,
-            state_distribution=state_distribution,
+        return self._aggregate_step_cohort(
             individual_results=individual_results,
-            assumptions_and_limitations=assumptions
+            cohort_name=cohort_name,
+            seed=seed,
+            assumed_reimbursement_rate=resolved_rate,
+            policy_mode=resolved_mode,
+            is_counterfactual=is_counterfactual
         )
 
     def run_multistep_cohort(
@@ -341,6 +428,8 @@ class SimulationEngine:
         run_id: Optional[str] = None,
         policy_id: Optional[int] = None,
         policy_config_id: Optional[int] = None,
+        policy_mode: Optional[str] = None,
+        policy_config: Optional[DTEPolicyConfig] = None,
     ) -> "MultiStepSimulationResult":
         """
         Executes a multi-step simulation cycle over a persona cohort:
@@ -350,9 +439,16 @@ class SimulationEngine:
         from simulation.social_network import SyntheticSocialNetwork
         from simulation.interaction import InteractionRecord, InteractionTopic
 
+        resolved_mode, resolved_rate, active_config, is_counterfactual = resolve_policy_parameters(
+            interface_name="run_multistep_cohort",
+            policy_mode=policy_mode,
+            assumed_reimbursement_rate=assumed_reimbursement_rate,
+            policy_config=policy_config
+        )
+
         effective_rate = (
-            assumed_reimbursement_rate
-            if assumed_reimbursement_rate is not None
+            resolved_rate
+            if resolved_rate is not None
             else RajarshiShahuPolicyEngine.DEFAULT_POC_ASSUMED_REIMBURSEMENT_RATE
         )
 
@@ -385,7 +481,11 @@ class SimulationEngine:
 
             # A. OBSERVE: Evaluate deterministic statutory policy outcome
             policy_evals: Dict[str, PolicyEvaluationResult] = {
-                p.persona_id: RajarshiShahuPolicyEngine.evaluate_eligibility(p, assumed_reimbursement_rate=effective_rate)
+                p.persona_id: RajarshiShahuPolicyEngine.evaluate_eligibility(
+                    p,
+                    assumed_reimbursement_rate=resolved_rate,
+                    config=active_config
+                )
                 for p in personas
             }
 
@@ -433,6 +533,18 @@ class SimulationEngine:
             for p in personas:
                 agent = agents[p.persona_id]
                 policy_eval = policy_evals[p.persona_id]
+
+                if resolved_mode == "legacy_poc":
+                    tuition_relief = policy_eval.tuition_fee_relief_inr
+                    exam_relief = 0.0
+                    total_relief = tuition_relief
+                    eff_rate = 0.50 if policy_eval.is_eligible else 0.0
+                else:
+                    tuition_relief = policy_eval.tuition_fee_relief_inr
+                    exam_relief = policy_eval.exam_fee_relief_inr
+                    total_relief = policy_eval.estimated_fee_relief_inr
+                    eff_rate = policy_eval.reimbursement_percentage
+
                 updated_metrics = agent.compute_baseline_metrics(policy_eval)
                 reasoning = agent.reason(policy_eval, updated_metrics)
 
@@ -650,8 +762,8 @@ class SimulationEngine:
                         },
                         scheme_name=policy_eval.scheme_name,
                         is_eligible=policy_eval.is_eligible,
-                        reimbursement_percentage=policy_eval.reimbursement_percentage,
-                        estimated_fee_relief_inr=policy_eval.estimated_fee_relief_inr,
+                        reimbursement_percentage=eff_rate,
+                        estimated_fee_relief_inr=total_relief,
                         statutory_failure_reasons=policy_eval.failure_reasons,
                         statutory_notes=policy_eval.statutory_notes,
                         benefit_assumptions=policy_eval.benefit_assumptions,
@@ -668,7 +780,12 @@ class SimulationEngine:
                         stated_intention=reasoning.stated_intention,
                         perceived_barriers=reasoning.perceived_barriers,
                         chosen_action=reasoning.chosen_action,
-                        confidence_level=reasoning.confidence_level
+                        confidence_level=reasoning.confidence_level,
+                        tuition_fee_relief_inr=tuition_relief,
+                        exam_fee_relief_inr=exam_relief,
+                        policy_mode=resolved_mode,
+                        is_counterfactual=is_counterfactual,
+                        policy_result=policy_eval
                     )
                 )
 
@@ -677,7 +794,9 @@ class SimulationEngine:
                 step_individual_outputs,
                 cohort_name=f"{cohort_name}-Step{step_idx}",
                 seed=seed,
-                assumed_reimbursement_rate=effective_rate
+                assumed_reimbursement_rate=resolved_rate,
+                policy_mode=resolved_mode,
+                is_counterfactual=is_counterfactual
             )
             step_cohort_results.append(step_cohort)
 
@@ -724,18 +843,22 @@ class SimulationEngine:
                 individual_results=step_cohort_results[-1].individual_results
             )
 
+        eff_assumed_rate = resolved_rate if resolved_rate is not None else step_cohort_results[-1].cohort_effective_relief_rate
+
         return MultiStepSimulationResult(
             cohort_name=cohort_name,
             total_personas=len(personas),
             total_steps=total_steps,
             seed=seed,
-            assumed_reimbursement_rate=effective_rate,
+            assumed_reimbursement_rate=eff_assumed_rate,
             network_summary=network.to_dict(),
             interactions_by_step=interactions_by_step,
             step_cohort_results=step_cohort_results,
             final_cohort_result=step_cohort_results[-1],
             state_evolution_summary=final_states,
-            assumptions_and_limitations=assumptions
+            assumptions_and_limitations=assumptions,
+            policy_mode=resolved_mode,
+            is_counterfactual=is_counterfactual
         )
 
     def _aggregate_step_cohort(
@@ -743,7 +866,9 @@ class SimulationEngine:
         individual_results: List[SimulationStepOutput],
         cohort_name: str,
         seed: Optional[int],
-        assumed_reimbursement_rate: float
+        assumed_reimbursement_rate: Optional[float],
+        policy_mode: str = "legacy_poc",
+        is_counterfactual: bool = False
     ) -> CohortSimulationResult:
         """Helper to compute standard CohortSimulationResult from a list of SimulationStepOutputs."""
         total = len(individual_results)
@@ -752,7 +877,17 @@ class SimulationEngine:
         eligibility_rate = round(eligible_count / total, 4) if total > 0 else 0.0
 
         total_relief = sum(r.estimated_fee_relief_inr for r in individual_results)
+        total_tuition = sum(r.tuition_fee_relief_inr for r in individual_results)
+        total_exam = sum(r.exam_fee_relief_inr for r in individual_results)
         avg_relief_eligible = round(total_relief / eligible_count, 2) if eligible_count > 0 else 0.0
+
+        total_eligible_fees = sum(
+            (r.demographics_summary.get("annual_tuition_fee", 0.0) + (r.policy_result.fee_breakdown.annual_exam_fee if r.policy_result and r.policy_result.fee_breakdown else 0.0))
+            for r in individual_results if r.is_eligible
+        )
+        cohort_effective_relief_rate = round(total_relief / total_eligible_fees, 4) if total_eligible_fees > 0 else (
+            round(sum(r.reimbursement_percentage for r in individual_results if r.is_eligible) / eligible_count, 4) if eligible_count > 0 else 0.0
+        )
 
         avg_awareness = round(sum(r.awareness_score for r in individual_results) / total, 4) if total > 0 else 0.0
         avg_benefit = round(sum(r.perceived_benefit_score for r in individual_results) / total, 4) if total > 0 else 0.0
@@ -802,9 +937,12 @@ class SimulationEngine:
         for r in individual_results:
             state_distribution[r.final_simulation_state] = state_distribution.get(r.final_simulation_state, 0) + 1
 
+        eff_assumed_rate = assumed_reimbursement_rate if assumed_reimbursement_rate is not None else cohort_effective_relief_rate
+
         assumptions = [
+            f"Policy mode evaluated: {policy_mode} (is_counterfactual={is_counterfactual}).",
             f"Statutory rules based on official Rajarshi Shahu EBC criteria (Income <= 8L, CAP admission, attendance >= 75%).",
-            f"Assumed fee reimbursement rate: {assumed_reimbursement_rate * 100:.0f}%.",
+            f"Assumed fee reimbursement rate: {eff_assumed_rate * 100:.0f}%.",
             f"Demographic fields grounded in Dhule 2010-11 education data; behavioral traits dynamically updated via peer diffusion."
         ]
 
@@ -812,7 +950,7 @@ class SimulationEngine:
             cohort_name=cohort_name,
             total_personas=total,
             seed=seed,
-            assumed_reimbursement_rate=assumed_reimbursement_rate,
+            assumed_reimbursement_rate=eff_assumed_rate,
             eligible_count=eligible_count,
             ineligible_count=ineligible_count,
             eligibility_rate=eligibility_rate,
@@ -833,7 +971,12 @@ class SimulationEngine:
             ineligibility_reasons_summary=ineligibility_reasons,
             state_distribution=state_distribution,
             individual_results=individual_results,
-            assumptions_and_limitations=assumptions
+            assumptions_and_limitations=assumptions,
+            policy_mode=policy_mode,
+            total_tuition_fee_relief_inr=total_tuition,
+            total_exam_fee_relief_inr=total_exam,
+            is_counterfactual=is_counterfactual,
+            cohort_effective_relief_rate=cohort_effective_relief_rate
         )
 
 
@@ -851,9 +994,11 @@ class MultiStepSimulationResult:
     final_cohort_result: CohortSimulationResult
     state_evolution_summary: Dict[str, Dict[str, Any]]
     assumptions_and_limitations: List[str] = field(default_factory=list)
+    policy_mode: str = "legacy_poc"
+    is_counterfactual: bool = False
 
     def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+        return _safe_serialize(self)
 
     def to_json(self, indent: int = 2) -> str:
         return json.dumps(self.to_dict(), indent=indent, default=str)

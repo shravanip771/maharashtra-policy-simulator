@@ -39,14 +39,20 @@ def test_eligible_student_simulation():
     engine = SimulationEngine()
     result = engine.run_step(student)
 
+    # Official DTE Policy (GR 08.07.2024: 100% Tuition Fee waiver for eligible female students)
     assert result.is_eligible is True
-    assert result.estimated_fee_relief_inr == 40000.0
-    assert result.reimbursement_percentage == 0.50
+    assert result.estimated_fee_relief_inr == 80000.0
+    assert result.reimbursement_percentage == 1.00
     assert len(result.statutory_failure_reasons) == 0
     assert len(result.benefit_assumptions) > 0
-    assert "PoC Assumption" in result.benefit_assumptions[0]
     assert result.application_probability > 0.5
     assert result.final_simulation_state == SimulationState.BENEFIT_RECEIVED.value
+
+    # Configurable rate override test (e.g. testing legacy 50% baseline assumption)
+    result_50 = engine.run_step(student, assumed_reimbursement_rate=0.50)
+    assert result_50.estimated_fee_relief_inr == 40000.0
+    assert result_50.reimbursement_percentage == 0.50
+    assert "PoC Assumption" in result_50.benefit_assumptions[0]
     print("PASS: test_eligible_student_simulation")
 
 def test_statutory_check_separation_and_configurable_benefit():
@@ -81,10 +87,15 @@ def test_statutory_check_separation_and_configurable_benefit():
     assert eval_100.estimated_fee_relief_inr == 60000.0
     assert any("100%" in note for note in eval_100.benefit_assumptions)
 
-    # 3. Default PoC baseline assumption (50%)
+    # 3. Explicit 50% rate override evaluation
+    eval_50 = RajarshiShahuPolicyEngine.evaluate_eligibility(student, assumed_reimbursement_rate=0.50)
+    assert eval_50.reimbursement_percentage == 0.50
+    assert eval_50.estimated_fee_relief_inr == 30000.0
+
+    # 4. Default official DTE benefit evaluation (Female student -> 100% under GR 08.07.2024)
     eval_default = RajarshiShahuPolicyEngine.evaluate_eligibility(student)
-    assert eval_default.reimbursement_percentage == 0.50
-    assert eval_default.estimated_fee_relief_inr == 30000.0
+    assert eval_default.reimbursement_percentage == 1.00
+    assert eval_default.estimated_fee_relief_inr == 60000.0
     print("PASS: test_statutory_check_separation_and_configurable_benefit")
 
 def test_ineligible_income_and_management_quota():

@@ -16,6 +16,7 @@ export default function PersonaDetail({ persona, onClose }) {
   const course = persona.course_name || persona.course || 'General Degree';
   const age = persona.age || 19;
   const district = persona.district || 'Dhule';
+  const taluka = persona.taluka || persona.district || '—';
   const income = Number(persona.family_income ?? persona.annual_family_income_inr ?? 0);
   const isEligible = persona.is_statutorily_eligible ?? persona.statutory_eligibility ?? false;
   const awareness = Number(persona.final_awareness ?? persona.awareness ?? 0);
@@ -49,6 +50,11 @@ export default function PersonaDetail({ persona, onClose }) {
           <div className="detail-item">
             <span className="detail-label">District</span>
             <span className="detail-value">{district}</span>
+          </div>
+
+          <div className="detail-item">
+            <span className="detail-label">Taluka</span>
+            <span className="detail-value">{taluka}</span>
           </div>
 
           <div className="detail-item">

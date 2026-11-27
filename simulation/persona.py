@@ -76,6 +76,12 @@ class StudentPersona:
     current_state: SimulationState = SimulationState.UNINFORMED
     memory: List[Dict[str, Any]] = field(default_factory=list)
 
+    # Stage 2A & 2.4 Scope Extensions (Appended for backward-compatible positional ordering)
+    taluka: Optional[str] = None
+    annual_exam_fee: float = 0.0          # in INR (separated from tuition fee)
+    is_orphan: bool = False               # Orphan status (persona attribute for future policy evaluation)
+    is_first_year: bool = False           # Fresh admission flag for attendance exemption
+
     def record_memory(self, step: int, event_type: str, details: Dict[str, Any]) -> None:
         """Appends a trace event to the persona's state memory."""
         self.memory.append({

@@ -15,6 +15,8 @@ class SimulationRequest(BaseModel):
     seed: int = Field(default=42, description="Random seed for deterministic reproducibility")
     use_gemini: bool = Field(default=False, description="Whether to invoke live Gemini API (defaults to offline stub)")
     gemini_model: str = Field(default="gemini-3.1-flash-lite", description="Gemini model identifier when use_gemini is True")
+    policy_mode: Optional[str] = Field(default="legacy_poc", description="Policy evaluation mode: legacy_poc, statutory, override, counterfactual")
+    assumed_reimbursement_rate: Optional[float] = Field(default=None, description="Optional benefit rate override")
 
 
 class SimulationMetadata(BaseModel):
@@ -29,6 +31,9 @@ class SimulationMetadata(BaseModel):
     is_synthetic_poc: bool
     assumed_reimbursement_rate: float
     data_disclaimer: str
+    resolved_policy_mode: str = "legacy_poc"
+    is_counterfactual: bool = False
+    policy_version: str = "2024.1-provisional"
 
 
 class ProvenanceBreakdown(BaseModel):
@@ -53,6 +58,9 @@ class AggregateMetrics(BaseModel):
     realized_uptake_rate: float
     total_estimated_fee_relief_inr: float
     average_fee_relief_per_eligible_inr: float
+    total_tuition_fee_relief_inr: float = 0.0
+    total_exam_fee_relief_inr: float = 0.0
+    cohort_effective_relief_rate: float = 0.0
 
 
 class StepMetric(BaseModel):
@@ -116,6 +124,12 @@ class PersonaOutput(BaseModel):
     major_barriers: List[str]
     inner_monologue: str
 
+    # Stage 2.4 / API contract compatibility
+    reimbursement_rate: float = 0.0
+    tuition_fee_relief_inr: float = 0.0
+    exam_fee_relief_inr: float = 0.0
+    policy_details: Optional[Dict[str, Any]] = None
+
 
 class InteractionRecordDTO(BaseModel):
     """Structured dialogue and state transition record for peer interactions."""
@@ -140,3 +154,40 @@ class SimulationResponse(BaseModel):
     network_topology: NetworkTopology
     personas: List[PersonaOutput]
     interactions: List[InteractionRecordDTO]
+
+
+class DistrictSummaryDTO(BaseModel):
+    """Aggregated outcome metrics for a single district within a statewide run."""
+    district_name: str
+    total_personas: int
+    eligible_count: int
+    ineligible_count: int
+    eligibility_rate: float
+    mean_awareness: float
+    mean_application_probability: float
+    expected_uptake_probability: float
+    realized_uptake_count: int
+    realized_uptake_rate: float
+    total_estimated_fee_relief_inr: float
+    average_fee_relief_per_eligible_inr: float
+
+
+class StatewideSimulationRequest(BaseModel):
+    """Configuration payload to trigger a 1,000-persona statewide simulation."""
+    district: str = Field(default="STATEWIDE", description="Statewide simulation scope")
+    simulation_steps: int = Field(default=2, ge=1, le=5, description="Number of simulation steps")
+    seed: int = Field(default=42, description="Random seed")
+    use_gemini: bool = Field(default=False, description="Use Gemini LLM API")
+    policy_mode: Optional[str] = Field(default="statutory", description="Policy evaluation mode")
+    assumed_reimbursement_rate: Optional[float] = Field(default=None, description="Optional override rate")
+
+
+class StatewideSimulationResponse(BaseModel):
+    """Response payload for statewide simulation across all 36 Maharashtra districts."""
+    is_statewide: bool = True
+    aggregate_metrics: Dict[str, Any]
+    personas: List[PersonaOutput]
+    district_summaries: Dict[str, DistrictSummaryDTO]
+    interactions: List[InteractionRecordDTO]
+    metadata: Dict[str, Any]
+    featured_personas: List[PersonaOutput] = Field(default_factory=list)

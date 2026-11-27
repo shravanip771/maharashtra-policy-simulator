@@ -344,5 +344,7 @@ class DhuleEducationDatasetAdapter:
             behavioral_priors=base.behavioral_priors,
             personality_priors=base.personality_priors,
             first_names_by_gender=base.first_names_by_gender,
-            last_names=["Patil", "Ahirrao", "Bhadane", "Chavan", "Deore", "Gavit", "Mali", "Suryawanshi"]
+            last_names=["Patil", "Ahirrao", "Bhadane", "Chavan", "Deore", "Gavit", "Mali", "Suryawanshi"],
+            talukas=list(ds_summary.derived_taluka_distribution.keys()),
+            taluka_distribution=ds_summary.derived_taluka_distribution
         )
